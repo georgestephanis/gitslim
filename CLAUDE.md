@@ -36,15 +36,15 @@ All arrays are parallel and indexed by repo number (0..n-1):
 
 ## TUI layout
 
-The footer is dynamically 2 or 3 lines tall: the baseline is a separator + key hint line; a third legend line is appended when any repos in the list carry a status indicator (`✓` shallow, `⚠` no remote, `!` unpushed). `draw()` computes `footer_h` and adjusts `vrows` accordingly. The last drawn line intentionally has **no trailing newline** — printing past the terminal's last row causes a scroll that shifts the whole display.
+The footer is dynamically 2 or 3 lines tall: the baseline is a separator + key hint line; a third legend line is appended when any repos in the list carry a status label (`done` = already shallow, `n/rm` = no remote, `push` = has unpushed commits). `draw()` computes `footer_h` and adjusts `vrows` accordingly. The last drawn line intentionally has **no trailing newline** — printing past the terminal's last row causes a scroll that shifts the whole display.
 
-Status indicators are a single character in the rightmost column of each row, with a legend at the bottom explaining them. The row format is:
+Status indicators are a 4-character text label in the rightmost column of each row, with a legend at the bottom explaining them. The row format is:
 
 ```
- [M] <path>  <size>  <age>  <status>
+ [M] <path>  <size>  <last commit>  <last touch>  <status>
 ```
 
-where `pw = cols - 36` gives the path column its width.
+where `pw = cols - 54` gives the path column its width. `<last commit>` is the age of the most recent git commit; `<last touch>` is the age of the most recently modified file in the working tree (from `RF[]`).
 
 ## Constraints and gotchas
 

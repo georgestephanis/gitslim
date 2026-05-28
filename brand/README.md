@@ -93,27 +93,31 @@ Everything else (`ink`, `ink-dim`, the backgrounds) is supporting cast.
 ## TUI layout, in one breath
 
 ```
-┌─────────────────────── ── gitslim · ~/code ── ─────────────────────────┐
-│ ▍ gitslim v0.1.0 · scanning ~/code     ▲ 4.2G freed · 27/142 selected │
-│                                                                        │
-│      REPOSITORY              .GIT SIZE      LAST COMMIT                │
-│ ──────────────────────────────────────────────────────────────         │
-│ [x]  ~/code/old-dotfiles         1.2G       3y ago         SLIM        │
-│ ▍[ ]  ~/code/personal/blog-engine 684M       11mo ago                  │
-│ [x]  ~/code/forks/linux          2.1G       2y ago         SLIM        │
-│ [ ]  ~/code/work/api-server       92M       2d ago                     │
-│ [x]  ~/code/archive/old-rails-app 412M      4y ago         SLIM        │
-│                                                                        │
-│ ↑↓ nav   SPC mark   S slim   ? help   Q quit                          │
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────── gitslim · ~/code ──────────────────────────────┐
+│ ▍ gitslim · scanning ~/code                          ▲ 4.2G freed          │
+│                                                                             │
+│      PATH                     .GIT    LAST COMMIT    LAST TOUCH             │
+│ ───────────────────────────────────────────────────────────────────         │
+│ [*]  ~/code/old-dotfiles        1.2G      3y ago        3y ago      SLIM   │
+│ ▍[ ]  ~/code/personal/blog     684M      11mo ago      2d ago              │
+│ [*]  ~/code/forks/linux         2.1G      2y ago        2y ago      SLIM   │
+│ [ ]  ~/code/work/api-server      92M      2d ago        4h ago              │
+│ [ ]  ~/code/archive/rails-app   412M      4y ago        4y ago      done   │
+│                                                                             │
+│ ↑↓/jk move  SPC mark  S slim  R age  Z size  P path  Q quit               │
+│  done=already shallow  n/rm=no remote  push=push first                      │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Cursor row**: 3-px cyan bar at left, 8 % cyan background tint, path in cyan.
-- **Marked row**: `[x]` and the size both flip to magenta. `SLIM` tag in lime.
+- **Cursor row**: cyan `│` bar at left, path in cyan.
+- **Marked row**: `[*]` and the size both flip to magenta. `SLIM` tag in lime.
 - **Size color** (independent of marked state): `< 100M` ink-dim, `< 1G` ink,
   `≥ 1G` amber.
-- **Key glyphs** colored by intent: cyan for nav, magenta for destructive (S, Y),
-  ink-dim for neutral (Q, ESC).
+- **Status labels** (4 chars, rightmost column): `SLIM` lime, `done` ink-mute,
+  `n/rm` amber, `push` magenta. Legend line shown at bottom whenever any
+  `done`/`n/rm`/`push` is present.
+- **Key glyphs** colored by intent: cyan for nav, magenta for destructive (`S`),
+  ink-dim for neutral (`Q`).
 
 Open `layout/layout-demo.html` for a live version with BROWSE / CONFIRM / RESULT
 states, an `annotate` toggle that overlays measurements, and a `CRT FX` toggle

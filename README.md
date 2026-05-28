@@ -19,7 +19,7 @@ An interactive TUI tool for finding git repositories and converting them to shal
 
 ## How it works
 
-`gitslim` scans a directory tree for git repositories, then presents an interactive list showing each repo's `.git` folder size and how long ago it was last committed to. You mark the repos you want to slim and press `S` — it converts them to shallow clones in place.
+`gitslim` scans a directory tree for git repositories, then presents an interactive list showing each repo's `.git` folder size, how long ago it was last committed to, and when the working tree was last modified. You mark the repos you want to slim and press `S` — it converts them to shallow clones in place.
 
 The slim operation uses:
 
@@ -81,13 +81,14 @@ gitslim ~/code     # scan a specific directory
 
 ### Status indicators
 
-A symbol appears at the right of each row when the repo has a notable state. A legend is shown at the bottom of the screen whenever any indicator is in use:
+A 4-character label appears at the right of each row when the repo has a notable state. A legend is shown at the bottom of the screen whenever any of `done`, `n/rm`, or `push` are present:
 
-| Symbol | Meaning |
-|--------|---------|
-| `✓` | Already a shallow clone — nothing to do |
-| `⚠` | No remote configured — cannot slim |
-| `!` | Has unpushed commits — slim is blocked until they are pushed |
+| Label | Meaning |
+|-------|---------|
+| `SLIM` | Marked and eligible — will be slimmed when you press `S` |
+| `done` | Already a shallow clone — nothing to do |
+| `n/rm` | No remote configured — cannot slim |
+| `push` | Has unpushed commits — slim is blocked until they are pushed |
 
 ### What gets skipped during slimming
 
