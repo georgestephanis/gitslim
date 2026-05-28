@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # gitslim — interactively find and slim git repositories to shallow clones
 #
+# Requires: bash 3.0+, git, find, du, tput, sort
 # Usage: gitslim [search-root]   (default: $HOME)
 #
 # Keys: ↑/↓ or j/k navigate · SPACE mark · S slim marked · R age · Z size · P path · Q quit
 
 set -uo pipefail
+
+if (( BASH_VERSINFO[0] < 3 )); then
+    printf 'gitslim: requires bash 3.0 or newer (running %s)\n' "$BASH_VERSION" >&2
+    exit 1
+fi
 
 SEARCH_ROOT="${1:-$HOME}"
 

@@ -19,7 +19,7 @@ This matches the technique from [afriza's gist](https://gist.github.com/afriza/6
 
 ## Requirements
 
-- bash 4+ (macOS ships with 3.2; use `brew install bash` if needed)
+- bash 3.0+ (macOS ships with 3.2, so no extra install needed)
 - Standard Unix tools: `git`, `find`, `du`, `tput`, `sort`
 - A terminal with ANSI color support
 
