@@ -24,14 +24,23 @@ _log() {
 }
 [[ -n "$DEBUG_LOG" ]] && : > "$DEBUG_LOG"
 
-# ── ANSI ───────────────────────────────────────────────────────────────────────
+# ── Brand palette (ANSI 256-colour) ───────────────────────────────────────────
 ESC=$'\033'
-BOLD="${ESC}[1m" DIM="${ESC}[2m" RESET="${ESC}[0m" REVERSE="${ESC}[7m"
-RED="${ESC}[31m" GREEN="${ESC}[32m" YELLOW="${ESC}[33m" CYAN="${ESC}[36m"
+RESET="${ESC}[0m"
+BOLD="${ESC}[1m"
+REVERSE="${ESC}[7m"
+MAGENTA="${ESC}[38;5;199m"   # #ff2bbe  marks, prompts, destructive
+CYAN="${ESC}[38;5;51m"        # #36f9f6  cursor, focus, links
+AMBER="${ESC}[38;5;221m"      # #ffcf3a  warning (large sizes, skips)
+LIME="${ESC}[38;5;155m"       # #b8ff5c  success (bytes freed)
+VIOLET="${ESC}[38;5;141m"     # #a06fff  borders, separators
+INK="${ESC}[38;5;255m"        # #f0e6ff  primary text
+INK_DIM="${ESC}[38;5;103m"    # #9f8fc8  secondary text
+INK_MUTE="${ESC}[38;5;60m"    # #5a4d80  key hints
 
 _rows() { local s; s=$(stty size 2>/dev/null) && printf '%s' "${s% *}" || tput lines 2>/dev/null || printf '24'; }
 _cols() { local s; s=$(stty size 2>/dev/null) && printf '%s' "${s#* }" || tput cols  2>/dev/null || printf '80'; }
-_sep()  { printf '─%.0s' $(seq 1 "${1:-$(_cols)}"); printf '\n'; }
+_sep()  { printf '%s' "$VIOLET"; printf '─%.0s' $(seq 1 "${1:-$(_cols)}"); printf '%s\n' "$RESET"; }
 
 # ── Data arrays ────────────────────────────────────────────────────────────────
 declare -a RP=()   # repo path
@@ -62,10 +71,14 @@ trap '_log "received SIGTERM"; exit 143' TERM
 
 # ── Formatting ─────────────────────────────────────────────────────────────────
 fmt_size() {
-    local kb=$1
-    if   (( kb < 1024    )); then printf '%5d KB' "$kb"
-    elif (( kb < 1048576 )); then printf '%5d MB' "$((kb / 1024))"
-    else                          printf '%5d GB' "$((kb / 1048576))"
+    local kb=$1 color
+    if   (( kb < 102400  )); then color="$INK_DIM"   # < 100 MB: dim
+    elif (( kb < 1048576 )); then color="$INK"        # < 1 GB: normal
+    else                          color="$AMBER"       # ≥ 1 GB: warning
+    fi
+    if   (( kb < 1024    )); then printf '%s%5d KB%s' "$color" "$kb"              "$RESET"
+    elif (( kb < 1048576 )); then printf '%s%5d MB%s' "$color" "$((kb / 1024))"   "$RESET"
+    else                          printf '%s%5d GB%s' "$color" "$((kb / 1048576))" "$RESET"
     fi
 }
 
@@ -154,13 +167,13 @@ draw() {
 
     # ── Header ──
     local marked_str=""
-    (( mc > 0 )) && marked_str="  ·  ${mc} marked ($(fmt_size $ms))"
-    printf "${BOLD}${CYAN}gitslim${RESET}  ·  %d repos  ·  sort:%s%s" "$n" "$SORT_BY" "$marked_str"
+    (( mc > 0 )) && marked_str="  ${INK_MUTE}·${RESET}  ${MAGENTA}${mc} marked${RESET} ${INK_MUTE}($(fmt_size $ms))${RESET}"
+    printf "${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}·${RESET}  ${INK}%d repos${RESET}  ${INK_MUTE}·  sort:${RESET}${INK}%s${RESET}%s" "$n" "$SORT_BY" "$marked_str"
     tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
     # ── Column headers ──
-    printf "${DIM}     %-*s  %8s  %-15s${RESET}" "$pw" "PATH" "GIT SIZE" "LAST COMMIT"
+    printf "${INK_DIM}     %-*s  %8s  %-15s${RESET}" "$pw" "PATH" "GIT SIZE" "LAST COMMIT"
     tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
@@ -172,19 +185,34 @@ draw() {
     for (( vi = SCROLL; vi < end; vi++ )); do
         local i="${RI[$vi]}"
         local path="${RP[$i]/#$HOME/\~}"
-        local mark="[ ]"; (( RM[i] )) && mark="[${GREEN}*${RESET}]"
-        local status=" "
-        (( RH[i] == 0         )) && status="⚠"
-        [[ "${RW[$i]}" == "true" ]] && status="✓"
-        (( RU[i]              )) && status="!"
 
-        (( vi == CURSOR )) && printf '%s' "$REVERSE"
-        printf " %s $(fit "$path" "$pw")  %s  %-15s  %s " \
+        # Mark: magenta star when selected
+        local row_end="$RESET"
+        (( vi == CURSOR )) && row_end="${RESET}${REVERSE}"
+        local mark="[ ]"
+        (( RM[i] )) && mark="[${MAGENTA}*${row_end}]"
+
+        # Status indicator with brand colour
+        local status=" "
+        (( RH[i] == 0            )) && status="${AMBER}⚠${row_end}"
+        [[ "${RW[$i]}" == "true" ]] && status="${LIME}✓${row_end}"
+        (( RU[i]                 )) && status="${MAGENTA}!${row_end}"
+
+        # Cursor row: cyan ▍ bar then REVERSE; path in cyan
+        if (( vi == CURSOR )); then
+            local path_col="${CYAN}$(fit "$path" "$pw")${RESET}${REVERSE}"
+            printf '%s▍%s' "$CYAN" "$RESET$REVERSE"
+        else
+            local path_col="$(fit "$path" "$pw")"
+            printf ' '
+        fi
+
+        printf "%s ${path_col}  %s  %-15s  %s " \
             "$mark" \
             "$(fmt_size "${RS[$i]}")" \
             "$(fmt_age "${RA[$i]}")" \
             "$status"
-        tput el 2>/dev/null   # erase to EOL; also extends reverse highlight on cursor row
+        tput el 2>/dev/null
         (( vi == CURSOR )) && printf '%s' "$RESET"
         printf '\n'
         (( row++ ))
@@ -197,15 +225,15 @@ draw() {
 
     # ── Footer ──
     _sep "$cols"
-    printf " ${DIM}↑↓/jk${RESET} move  ${DIM}SPC${RESET} mark  ${DIM}S${RESET} slim  ${DIM}R${RESET} age  ${DIM}Z${RESET} size  ${DIM}P${RESET} path  ${DIM}Q${RESET} quit"
+    printf " ${CYAN}↑↓/jk${INK_MUTE} move  ${CYAN}SPC${INK_MUTE} mark  ${MAGENTA}S${INK_MUTE} slim  ${CYAN}R${INK_MUTE} age  ${CYAN}Z${INK_MUTE} size  ${CYAN}P${INK_MUTE} path  ${INK_MUTE}Q quit${RESET}"
     tput el 2>/dev/null
     if (( footer_h == 3 )); then
         printf '\n'
         local legend=""
-        (( has_shallow  )) && legend+=" ${DIM}✓ shallow${RESET}"
-        (( has_noremote )) && legend+=" ${DIM}⚠ no remote${RESET}"
-        (( has_unpushed )) && legend+=" ${DIM}! unpushed commits${RESET}"
-        printf "%s" "$legend"
+        (( has_shallow  )) && legend+=" ${LIME}✓${INK_MUTE} shallow${RESET}"
+        (( has_noremote )) && legend+="${INK_MUTE}  ${AMBER}⚠${INK_MUTE} no remote${RESET}"
+        (( has_unpushed )) && legend+="${INK_MUTE}  ${MAGENTA}!${INK_MUTE} unpushed commits${RESET}"
+        printf "${INK_MUTE}%s${RESET}" "$legend"
         tput el 2>/dev/null
     fi
     # No trailing newline — printing past the last row scrolls the terminal
@@ -292,7 +320,7 @@ do_slim() {
 
     tput rmcup; tput cnorm
 
-    printf "\n${BOLD}${CYAN}gitslim — slimming %d repo(s)${RESET}\n" "${#to_slim[@]}"
+    printf "\n${BOLD}${CYAN}gitslim${RESET}${INK_MUTE} — slimming ${RESET}${INK}%d repo(s)${RESET}\n" "${#to_slim[@]}"
 
     for i in "${to_slim[@]}"; do
         local repo="${RP[$i]}"
@@ -301,7 +329,7 @@ do_slim() {
         # Bail on dirty working tree
         if ! git -C "$repo" diff --quiet 2>/dev/null || \
            ! git -C "$repo" diff --cached --quiet 2>/dev/null; then
-            printf "  ${YELLOW}⚠ Skipped${RESET}: uncommitted changes present\n"
+            printf "  ${AMBER}⚠ Skipped${RESET}: uncommitted changes present\n"
             continue
         fi
 
@@ -309,7 +337,7 @@ do_slim() {
         local ahead
         ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) || ahead=0
         if (( ahead > 0 )); then
-            printf "  ${YELLOW}⚠ Skipped${RESET}: %d unpushed commit(s) — push first\n" "$ahead"
+            printf "  ${AMBER}⚠ Skipped${RESET}: %d unpushed commit(s) — push first\n" "$ahead"
             continue
         fi
 
@@ -339,9 +367,9 @@ do_slim() {
             RW[$i]="true"
             RM[$i]=0
             local saved=$(( size_before - size_after ))
-            printf "  ${GREEN}✓ Done${RESET} — saved $(fmt_size $saved)\n"
+            printf "  ${LIME}✓ Done${RESET} — saved $(fmt_size $saved)\n"
         else
-            printf "  ${RED}✗ Failed${RESET}: git pull --depth 1 returned an error\n"
+            printf "  ${MAGENTA}✗ Failed${RESET}: git pull returned an error\n"
         fi
     done
 
@@ -403,7 +431,18 @@ scan() {
 main() {
     load_config
     _log "startup: bash=$BASH_VERSION TERM=${TERM:-unset}"
-    printf "${BOLD}${CYAN}gitslim${RESET}  —  scanning %s\n" "$SEARCH_ROOT"
+    printf '%s' "$CYAN"
+    cat << 'LOGO'
+       _ _       _ _
+   ___(_) |_ ___| (_)_ __ ___
+  / _ \ | __/ __| | | '_ ` _ \
+ | (_| | | |_\__ \ | | | | | |
+  \__, |_|\__|___/_|_|_| |_| |
+   __/ |
+  |___/  ✂─ ─ ─ ─ ─ ─ ─
+LOGO
+    printf '%s' "$RESET"
+    printf "${INK_DIM}scanning %s${RESET}\n" "$SEARCH_ROOT"
     scan
     do_sort
 

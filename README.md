@@ -1,5 +1,20 @@
 # gitslim
 
+![gitslim banner](brand/banner/gitslim-banner-preview.png)
+
+```
+         _ _       _ _
+    __ _(_) |_ ___| (_)_ __ ___
+   / _` | | __/ __| | | '_ ` _ \
+  | (_| | | |_\__ \ | | | | | | |
+   \__, |_|\__|___/_|_|_| |_| |_|
+   |___/
+
+   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ✂
+
+   trim your repos. reclaim your disk.
+```
+
 An interactive TUI tool for finding git repositories and converting them to shallow clones to reclaim disk space — inspired by [npkill](https://github.com/voidcosmos/npkill).
 
 ## How it works
