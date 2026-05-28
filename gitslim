@@ -54,6 +54,8 @@ declare -a RM=()   # marked: 1/0
 declare -a RI=()   # sorted indices into above arrays
 
 CURSOR=0; SCROLL=0; SORT_BY=age
+SCANNING=0       # 1 while scan is running; draw() adapts header/footer
+SAVED_STTY=""    # terminal state saved before TUI entry; restored on cleanup
 
 # Config (overridden by load_config)
 DEPTH=1    # commits to keep (--depth N)
@@ -61,10 +63,14 @@ SINCE=""   # keep history since date/period (overrides DEPTH when set)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 _cleanup() {
-    tput smam  2>/dev/null || true   # re-enable line wrap
+    tput smam  2>/dev/null || true
     tput rmcup 2>/dev/null || true
     tput cnorm 2>/dev/null || true
-    stty echo  2>/dev/null || true
+    if [[ -n "$SAVED_STTY" ]]; then
+        stty "$SAVED_STTY" 2>/dev/null || true
+    else
+        stty echo 2>/dev/null || true
+    fi
 }
 trap _cleanup EXIT
 trap '_log "received SIGINT";  exit 130' INT
@@ -171,7 +177,11 @@ draw() {
     # ── Header ──
     local marked_str=""
     (( mc > 0 )) && marked_str="  ${INK_MUTE}·${RESET}  ${MAGENTA}${mc} marked${RESET} ${INK_MUTE}($(fmt_size $ms))${RESET}"
-    printf "${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}·${RESET}  ${INK}%d repos${RESET}  ${INK_MUTE}·  sort:${RESET}${INK}%s${RESET}%s" "$n" "$SORT_BY" "$marked_str"
+    if (( SCANNING )); then
+        printf "${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}·${RESET}  ${INK}%d repos${RESET}  ${INK_MUTE}·  scanning…${RESET}" "$n"
+    else
+        printf "${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}·${RESET}  ${INK}%d repos${RESET}  ${INK_MUTE}·  sort:${RESET}${INK}%s${RESET}%s" "$n" "$SORT_BY" "$marked_str"
+    fi
     tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
@@ -232,7 +242,11 @@ draw() {
 
     # ── Footer ──
     _sep "$cols"
-    printf " ${CYAN}↑↓/jk${INK_MUTE} move  ${CYAN}SPC${INK_MUTE} mark  ${MAGENTA}S${INK_MUTE} slim  ${CYAN}R${INK_MUTE} age  ${CYAN}Z${INK_MUTE} size  ${CYAN}P${INK_MUTE} path  ${INK_MUTE}Q quit${RESET}"
+    if (( SCANNING )); then
+        printf " ${INK_MUTE}scanning — ${CYAN}Q${INK_MUTE} to quit${RESET}"
+    else
+        printf " ${CYAN}↑↓/jk${INK_MUTE} move  ${CYAN}SPC${INK_MUTE} mark  ${MAGENTA}S${INK_MUTE} slim  ${CYAN}R${INK_MUTE} age  ${CYAN}Z${INK_MUTE} size  ${CYAN}P${INK_MUTE} path  ${INK_MUTE}Q quit${RESET}"
+    fi
     tput el 2>/dev/null
     if (( footer_h == 3 )); then
         printf '\n'
@@ -360,11 +374,9 @@ do_slim() {
         git -C "$repo" pull "${depth_args[@]}" 2>&1 | sed 's/^/  /' || ok=0
 
         if (( ok )); then
-            local tags; tags=$(git -C "$repo" tag -l 2>/dev/null || true)
-            if [[ -n "$tags" ]]; then
-                # shellcheck disable=SC2086
-                git -C "$repo" tag -d $tags 2>&1 | sed 's/^/  /' || true
-            fi
+            git -C "$repo" tag -l 2>/dev/null \
+                | xargs git -C "$repo" tag -d -- 2>&1 \
+                | sed 's/^/  /' || true
             git -C "$repo" reflog expire --expire=all --all 2>&1 | sed 's/^/  /'
             git -C "$repo" gc --prune=all 2>&1 | sed 's/^/  /'
 
@@ -380,10 +392,10 @@ do_slim() {
         fi
     done
 
-    printf "\n${DIM}Press any key to return...${RESET}\n"
+    printf "\n${INK_DIM}Press any key to return…${RESET}\n"
     IFS= read -r -s -n1
 
-    tput smcup; tput civis; stty -echo
+    tput smcup; tput civis; stty cbreak -echo 2>/dev/null
     do_sort
 }
 
@@ -423,8 +435,14 @@ scan() {
 
         RP+=("$repo"); RS+=("$kb"); RA+=("$age")
         RH+=("$has_remote"); RW+=("$shallow"); RU+=("$unpushed"); RF+=("$last_mod"); RM+=(0)
+        RI+=("$(( ${#RP[@]} - 1 ))")   # discovery order; do_sort() re-orders after scan
 
-        printf "\r  Scanning… found %d repositories" "${#RP[@]}" >&2
+        draw
+
+        # Non-blocking quit check (works because terminal is in cbreak mode)
+        if IFS= read -r -s -n1 -t 0 REPLY 2>/dev/null; then
+            case "$REPLY" in q|Q|$'\x03') return 1 ;; esac
+        fi
 
     done < <(
         find "$SEARCH_ROOT" \
@@ -435,14 +453,14 @@ scan() {
             \) -prune \
             -o -type d -name '.git' -print 2>/dev/null
     )
-
-    printf "\r  Found %d repositories.%20s\n" "${#RP[@]}" '' >&2
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 main() {
     load_config
     _log "startup: bash=$BASH_VERSION TERM=${TERM:-unset}"
+
+    # Splash on normal screen (visible when TUI exits)
     printf '%s' "$CYAN"
     cat << 'LOGO'
        _ _       _ _
@@ -454,19 +472,28 @@ main() {
   |___/  ✂─ ─ ─ ─ ─ ─ ─
 LOGO
     printf '%s' "$RESET"
-    printf "${INK_DIM}scanning %s${RESET}\n" "$SEARCH_ROOT"
-    scan
-    do_sort
 
-    if (( ${#RI[@]} == 0 )); then
+    # Enter TUI before scanning so repos appear as they're found
+    SAVED_STTY=$(stty -g 2>/dev/null)
+    tput smcup
+    tput civis
+    tput rmam 2>/dev/null || true
+    stty cbreak -echo 2>/dev/null   # cbreak: per-char delivery; needed for read -t 0
+
+    SCANNING=1
+    scan || { _cleanup; exit 0; }   # return 1 means user quit during scan
+    SCANNING=0
+
+    if (( ${#RP[@]} == 0 )); then
+        _cleanup
         printf "No git repositories found under %s\n" "$SEARCH_ROOT"
         exit 0
     fi
 
-    tput smcup
-    tput civis
-    tput rmam 2>/dev/null || true   # disable line wrap; overflow clips instead
-    stty -echo
+    do_sort   # apply chosen sort order now that all repos are known
+
+    # Discard any keys pressed during scan to avoid spurious navigation
+    while IFS= read -r -s -n1 -t 0 _ 2>/dev/null; do :; done
 
     while true; do
         draw

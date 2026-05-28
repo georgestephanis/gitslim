@@ -14,7 +14,7 @@ Everything is in one bash script. The execution flow is:
 
 2. **Sort** (`do_sort`): builds a sorted index array `RI` over the data arrays using an external `sort` invocation via a temp file. Default sort is by age descending (oldest first).
 
-3. **TUI loop** (`draw` + `read_key` + `main`): switches to the alternate screen (`tput smcup`), disables line-wrap (`tput rmam`), draws the list on every keypress by repositioning the cursor to 0,0. Each row ends with `tput el` (erase to end of line) rather than space-padding, which both clears stale content and extends the reverse-video highlight bar on the cursor row to the full terminal width.
+3. **TUI loop** (`draw` + `read_key` + `main`): the alternate screen and `stty cbreak -echo` are entered *before* scanning so repos appear in the TUI as they are found. `SCANNING=1` while the scan is in progress; `draw()` adapts its header and footer for that state, and a non-blocking `read -t 0` after each repo lets the user quit early. After scan completes, `do_sort()` applies the real sort order and buffered keypresses are flushed. The TUI then redraws on every keypress, repositioning the cursor to 0,0. Each row ends with `tput el` (erase to end of line) to clear stale content and extend the reverse-video highlight bar.
 
 4. **Slim operation** (`do_slim`): exits the alternate screen, runs `git pull --depth N` (or `--shallow-since=DATE` from config) + cleanup commands, updates the in-memory arrays, then returns to the TUI.
 
@@ -52,6 +52,7 @@ where `pw = cols - 36` gives the path column its width.
 - **Bash arrays don't cross subshell boundaries.** The scan runs in the main shell (not backgrounded) for this reason. The progress counter uses `\r` to update in place.
 - **`_sep`** uses `printf '─%.0s' $(seq 1 N)` to repeat the box-drawing character N times. `tr` is not used because it works byte-by-byte and `─` is a 3-byte UTF-8 sequence.
 - **`fit`** truncates with `…` (ellipsis character) at width-1 to keep column alignment intact.
+- **`stty cbreak -echo`** is used instead of just `stty -echo`. `cbreak` disables canonical (line-buffered) mode so individual keypresses are delivered immediately. This is required for `read -t 0` (the non-blocking scan-time quit check) to work — in canonical mode, stdin has no data until Enter is pressed. The original terminal settings are saved with `stty -g` and fully restored in `_cleanup`.
 - **`read_key`** sets `REPLY` directly rather than using `printf`+command substitution. Running `read` inside `$()` forks a subshell that temporarily modifies terminal settings; when it exits the terminal state can become inconsistent. Setting `REPLY` in the current shell avoids this entirely.
 - **bash 3.x `read -t`** only accepts integer timeouts (fractional-second support was added in bash 4.0). `read_key` uses `-t 1`; arrow-key bytes are already in the TTY buffer so the read completes instantly for real sequences, and bare ESC waits at most 1 second.
 - **`tput rmam`** disables automatic line-wrap on entry so that any overlong rows (e.g. very long paths) clip at the right margin rather than wrapping and adding phantom lines. Restored with `tput smam` in `_cleanup`.
