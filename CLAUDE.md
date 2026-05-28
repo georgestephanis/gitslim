@@ -10,7 +10,7 @@ The script is a single file: `gitslim`. Install it by copying or symlinking it o
 
 Everything is in one bash script. The execution flow is:
 
-1. **Scan phase** (`scan`): runs `find` to locate `.git` directories, then for each one calls `du`, `git log`, `git rev-parse --is-shallow-repository`, `git remote`, and `git rev-list --count @{u}..HEAD`. Populates seven parallel arrays (`RP`, `RS`, `RA`, `RH`, `RW`, `RU`, `RM`).
+1. **Scan phase** (`scan`): runs `find` to locate `.git` directories, then for each one calls `du`, `git log`, `git rev-parse --is-shallow-repository`, `git remote`, `git rev-list --count @{u}..HEAD`, and `find … stat` to get the most recently modified non-git file. Populates eight parallel arrays (`RP`, `RS`, `RA`, `RH`, `RW`, `RU`, `RF`, `RM`).
 
 2. **Sort** (`do_sort`): builds a sorted index array `RI` over the data arrays using an external `sort` invocation via a temp file. Default sort is by age descending (oldest first).
 
@@ -30,6 +30,7 @@ All arrays are parallel and indexed by repo number (0..n-1):
 | `RH[]` | Has remote: 1 or 0 |
 | `RW[]` | Is shallow: `true` or `false` |
 | `RU[]` | Has unpushed commits: 1 or 0 |
+| `RF[]` | Last file modification in working tree (epoch seconds; 0 if unknown) |
 | `RM[]` | Marked for slimming: 1 or 0 |
 | `RI[]` | Sorted indices into the above arrays |
 

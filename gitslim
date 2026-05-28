@@ -49,6 +49,7 @@ declare -a RA=()   # age in days since last commit
 declare -a RH=()   # has remote: 1/0
 declare -a RW=()   # is shallow: true/false
 declare -a RU=()   # has unpushed commits: 1/0
+declare -a RF=()   # last file modification (epoch seconds; 0 if unknown)
 declare -a RM=()   # marked: 1/0
 declare -a RI=()   # sorted indices into above arrays
 
@@ -158,10 +159,12 @@ draw() {
     (( CURSOR >= SCROLL + vrows )) && SCROLL=$(( CURSOR - vrows + 1 ))
     (( SCROLL < 0               )) && SCROLL=0
 
-    # Row layout: " [M] <path>  <size>  <age>  <status> "
-    # Fixed visible chars outside path: 1+3+1 + 2+8 + 2+15 + 2+1+1 = 36
-    local pw=$(( cols - 36 ))
+    # Row layout: " [M] <path>  <size>  <last commit>  <last touch>  <status> "
+    # Fixed visible chars outside path: 1+3+1 + 2+8 + 2+15 + 2+15 + 2+1+1 = 53
+    local pw=$(( cols - 53 ))
     (( pw < 12 )) && pw=12
+
+    local now_d; now_d=$(date +%s)
 
     tput cup 0 0
 
@@ -173,7 +176,7 @@ draw() {
     _sep "$cols"
 
     # ── Column headers ──
-    printf "${INK_DIM}     %-*s  %8s  %-15s${RESET}" "$pw" "PATH" "GIT SIZE" "LAST COMMIT"
+    printf "${INK_DIM}     %-*s  %8s  %-15s  %-15s${RESET}" "$pw" "PATH" "GIT SIZE" "LAST COMMIT" "LAST TOUCH"
     tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
@@ -184,7 +187,7 @@ draw() {
 
     for (( vi = SCROLL; vi < end; vi++ )); do
         local i="${RI[$vi]}"
-        local path="${RP[$i]/#$HOME/\~}"
+        local path="${RP[$i]/#$HOME/~}"
 
         # Mark: magenta star when selected
         local row_end="$RESET"
@@ -207,10 +210,14 @@ draw() {
             printf ' '
         fi
 
-        printf "%s ${path_col}  %s  %-15s  %s " \
+        local touch_age=9999
+        (( RF[i] > 0 )) && touch_age=$(( (now_d - RF[i]) / 86400 ))
+
+        printf "%s ${path_col}  %s  %-15s  %-15s  %s " \
             "$mark" \
             "$(fmt_size "${RS[$i]}")" \
             "$(fmt_age "${RA[$i]}")" \
+            "$(fmt_age "$touch_age")" \
             "$status"
         tput el 2>/dev/null
         (( vi == CURSOR )) && printf '%s' "$RESET"
@@ -409,8 +416,13 @@ scan() {
         ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) \
             && (( ahead > 0 )) && unpushed=1 || true
 
+        local last_mod=0 fmod
+        fmod=$(find "$repo" -not -path '*/.git*' -type f \
+                   -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)
+        [[ "$fmod" =~ ^[0-9]+$ ]] && last_mod=$fmod
+
         RP+=("$repo"); RS+=("$kb"); RA+=("$age")
-        RH+=("$has_remote"); RW+=("$shallow"); RU+=("$unpushed"); RM+=(0)
+        RH+=("$has_remote"); RW+=("$shallow"); RU+=("$unpushed"); RF+=("$last_mod"); RM+=(0)
 
         printf "\r  Scanning… found %d repositories" "${#RP[@]}" >&2
 
