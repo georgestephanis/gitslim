@@ -10,7 +10,7 @@ The script is a single file: `gitslim`. Install it by copying or symlinking it o
 
 Everything is in one bash script. The execution flow is:
 
-1. **Scan phase** (`scan`): runs `find` to locate `.git` directories, then for each one calls `du`, `git log`, `git rev-parse --is-shallow-repository`, `git remote`, `git rev-list --count @{u}..HEAD`, and `find … stat` to get the most recently modified non-git file. Populates eight parallel arrays (`RP`, `RS`, `RA`, `RH`, `RW`, `RU`, `RF`, `RM`).
+1. **Scan phase** (`scan`): runs in two passes. Phase 1 (`discover_repos`) is just `find` — populates `RP[]` with all repo paths and seeds the data arrays with placeholders (`RS=0`, `RA=9999`, etc.); the full list draws immediately so the user isn't staring at an empty terminal. Phase 2 (`enrich_repo` per index) does the expensive work: `du`, `git log`, `git rev-parse --is-shallow-repository`, `git remote`, `git rev-list --count @{u}..HEAD`, and `find … stat`. `draw()` runs between each enrichment so cells fill in progressively. A persistent cache at `~/.cache/gitslim/cache` (or `~/.gitslim-cache` fallback) keyed by repo path with the `.git` mtime as the freshness check makes subsequent runs nearly instant.
 
 2. **Sort** (`do_sort`): builds a sorted index array `RI` over the data arrays using an external `sort` invocation via a temp file. Default sort is by age descending (oldest first).
 
@@ -49,7 +49,8 @@ where `pw = cols - 36` gives the path column its width.
 ## Constraints and gotchas
 
 - **`set -uo pipefail`** is set but not `-e`. Arithmetic expressions like `(( x ))` that evaluate to zero return exit code 1; that's intentional and must not be changed to `-e` without auditing every `(( ))` site.
-- **Bash arrays don't cross subshell boundaries.** The scan runs in the main shell (not backgrounded) for this reason. The progress counter uses `\r` to update in place.
+- **Bash arrays don't cross subshell boundaries.** The scan runs in the main shell (not backgrounded) for this reason.
+- **`stty size </dev/tty`** — `stty size` reads from fd 0 (stdin) by default. Inside the `while read` scan loop, fd 0 is the `find` process-substitution pipe, not the terminal. Without `</dev/tty`, `stty size` silently fails and `_rows()`/`_cols()` fall back to terminfo defaults (24×80), causing a visible layout jump when the scan completes and stdin returns to the terminal. `</dev/tty` explicitly targets the controlling terminal regardless of stdin redirection.
 - **`_sep`** uses `printf '─%.0s' $(seq 1 N)` to repeat the box-drawing character N times. `tr` is not used because it works byte-by-byte and `─` is a 3-byte UTF-8 sequence.
 - **`fit`** truncates with `…` (ellipsis character) at width-1 to keep column alignment intact.
 - **`stty cbreak -echo`** is used instead of just `stty -echo`. `cbreak` disables canonical (line-buffered) mode so individual keypresses are delivered immediately. This is required for `read -t 0` (the non-blocking scan-time quit check) to work — in canonical mode, stdin has no data until Enter is pressed. The original terminal settings are saved with `stty -g` and fully restored in `_cleanup`.
@@ -60,6 +61,10 @@ where `pw = cols - 36` gives the path column its width.
 - The TUI redraws by moving to `(0,0)` and overwriting every row. Do not use `tput clear` in the draw loop.
 - After `do_slim` returns to the TUI it calls `do_sort` to re-sort with updated sizes/shallow flags.
 - **`do_slim` skips repos** with uncommitted changes or unpushed commits (both would result in data loss). It re-checks unpushed commits at slim time rather than relying on the cached `RU[]` value, which may be stale.
+
+## Cache
+
+`load_cache` / `save_cache` / `cache_lookup` read and write `~/.cache/gitslim/cache` (or `~/.gitslim-cache` if XDG cache isn't writable). Format is tab-separated, one record per line: `path\tgit_mtime\tkb\tage\thas_remote\tshallow\tunpushed\tlast_mod`. The cache lookup uses the `.git` directory's mtime as the freshness check — if it hasn't changed since the cache was written, the cached values are loaded into the data arrays and the enrichment for that repo is skipped entirely. Unenriched entries (`RS == 0`) are excluded from `save_cache` so partial scans don't pollute the cache.
 
 ## Config file
 

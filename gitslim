@@ -38,8 +38,8 @@ INK="${ESC}[38;5;255m"        # #f0e6ff  primary text
 INK_DIM="${ESC}[38;5;103m"    # #9f8fc8  secondary text
 INK_MUTE="${ESC}[38;5;60m"    # #5a4d80  key hints
 
-_rows() { local s; s=$(stty size 2>/dev/null) && printf '%s' "${s% *}" || tput lines 2>/dev/null || printf '24'; }
-_cols() { local s; s=$(stty size 2>/dev/null) && printf '%s' "${s#* }" || tput cols  2>/dev/null || printf '80'; }
+_rows() { local s; s=$(stty size </dev/tty 2>/dev/null) && printf '%s' "${s% *}" || tput lines 2>/dev/null || printf '24'; }
+_cols() { local s; s=$(stty size </dev/tty 2>/dev/null) && printf '%s' "${s#* }" || tput cols  2>/dev/null || printf '80'; }
 _sep()  { printf '%s' "$VIOLET"; printf '─%.0s' $(seq 1 "${1:-$(_cols)}"); printf '%s\n' "$RESET"; }
 
 # ── Data arrays ────────────────────────────────────────────────────────────────
@@ -56,6 +56,13 @@ declare -a RI=()   # sorted indices into above arrays
 CURSOR=0; SCROLL=0; SORT_BY=age
 SCANNING=0       # 1 while scan is running; draw() adapts header/footer
 SAVED_STTY=""    # terminal state saved before TUI entry; restored on cleanup
+TOTAL_FREED=0    # cumulative KB freed across slim operations this session
+
+# Cache: ~/.cache/gitslim/cache (XDG); fallback ~/.gitslim-cache
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gitslim"
+CACHE_FILE="$CACHE_DIR/cache"
+[[ ! -w "${XDG_CACHE_HOME:-$HOME/.cache}" && ! -w "$HOME/.cache" ]] && CACHE_FILE="$HOME/.gitslim-cache"
+declare -a CACHE_KEYS=() CACHE_VALS=()   # parallel arrays: key=repo path, val=tab-sep fields
 
 # Config (overridden by load_config)
 DEPTH=1    # commits to keep (--depth N)
@@ -78,14 +85,21 @@ trap '_log "received SIGTERM"; exit 143' TERM
 
 # ── Formatting ─────────────────────────────────────────────────────────────────
 fmt_size() {
-    local kb=$1 color
-    if   (( kb < 102400  )); then color="$INK_DIM"   # < 100 MB: dim
-    elif (( kb < 1048576 )); then color="$INK"        # < 1 GB: normal
-    else                          color="$AMBER"       # ≥ 1 GB: warning
+    local kb=$1 color="${2:-}"
+    if [[ -z "$color" ]]; then
+        if   (( kb < 102400  )); then color="$INK_DIM"   # < 100 MB
+        elif (( kb < 1048576 )); then color="$INK"        # 100 MB – 1 GB
+        else                          color="$AMBER"       # ≥ 1 GB
+        fi
     fi
-    if   (( kb < 1024    )); then printf '%s%5d KB%s' "$color" "$kb"              "$RESET"
-    elif (( kb < 1048576 )); then printf '%s%5d MB%s' "$color" "$((kb / 1024))"   "$RESET"
-    else                          printf '%s%5d GB%s' "$color" "$((kb / 1048576))" "$RESET"
+    if   (( kb < 1024    )); then
+        printf '%s%5dK%s' "$color" "$kb" "$RESET"
+    elif (( kb < 1048576 )); then
+        printf '%s%5dM%s' "$color" "$((kb / 1024))" "$RESET"
+    else
+        local gib=$(( kb / 1048576 ))
+        local gib_frac=$(( (kb * 10 / 1048576) % 10 ))
+        printf '%s%3d.%1dG%s' "$color" "$gib" "$gib_frac" "$RESET"
     fi
 }
 
@@ -145,7 +159,7 @@ draw() {
     local cols rows
     cols=$(_cols); rows=$(_rows)
 
-    local n=${#RI[@]} mc=0 ms=0 has_noremote=0 has_shallow=0 has_unpushed=0
+    local n=${#RI[@]} mc=0 ms=0 has_noremote=0 has_shallow=0 has_unpushed=0 i vi
     for i in "${RI[@]}"; do
         (( RM[i]          )) && { (( mc++ )); (( ms += RS[i] )); }
         (( RH[i] == 0     )) && has_noremote=1
@@ -166,8 +180,8 @@ draw() {
     (( SCROLL < 0               )) && SCROLL=0
 
     # Row layout: " [M] <path>  <size>  <last commit>  <last touch>  <status> "
-    # Fixed visible chars outside path: 1+3+1 + 2+8 + 2+15 + 2+15 + 2+1+1 = 53
-    local pw=$(( cols - 53 ))
+    # Fixed visible chars outside path: 1+3+1 + 2+6 + 2+15 + 2+15 + 2+4+1 = 54
+    local pw=$(( cols - 54 ))
     (( pw < 12 )) && pw=12
 
     local now_d; now_d=$(date +%s)
@@ -177,16 +191,18 @@ draw() {
     # ── Header ──
     local marked_str=""
     (( mc > 0 )) && marked_str="  ${INK_MUTE}·${RESET}  ${MAGENTA}${mc} marked${RESET} ${INK_MUTE}($(fmt_size $ms))${RESET}"
+    local freed_str=""
+    (( TOTAL_FREED > 0 )) && freed_str="  ${LIME}▲ $(fmt_size $TOTAL_FREED) freed${RESET}"
     if (( SCANNING )); then
-        printf "${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}·${RESET}  ${INK}%d repos${RESET}  ${INK_MUTE}·  scanning…${RESET}" "$n"
+        printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · scanning…${RESET}%s" "$n" "$freed_str"
     else
-        printf "${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}·${RESET}  ${INK}%d repos${RESET}  ${INK_MUTE}·  sort:${RESET}${INK}%s${RESET}%s" "$n" "$SORT_BY" "$marked_str"
+        printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · sort:${RESET}${INK}%s${RESET}%s%s" "$n" "$SORT_BY" "$marked_str" "$freed_str"
     fi
     tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
     # ── Column headers ──
-    printf "${INK_DIM}     %-*s  %8s  %-15s  %-15s${RESET}" "$pw" "PATH" "GIT SIZE" "LAST COMMIT" "LAST TOUCH"
+    printf "${INK_DIM}     %-*s  %6s  %15s  %15s${RESET}" "$pw" "PATH" ".GIT" "LAST COMMIT" "LAST TOUCH"
     tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
@@ -199,38 +215,53 @@ draw() {
         local i="${RI[$vi]}"
         local path="${RP[$i]/#$HOME/~}"
 
-        # Mark: magenta star when selected
-        local row_end="$RESET"
-        (( vi == CURSOR )) && row_end="${RESET}${REVERSE}"
-        local mark="[ ]"
-        (( RM[i] )) && mark="[${MAGENTA}*${row_end}]"
-
-        # Status indicator with brand colour
-        local status=" "
-        (( RH[i] == 0            )) && status="${AMBER}⚠${row_end}"
-        [[ "${RW[$i]}" == "true" ]] && status="${LIME}✓${row_end}"
-        (( RU[i]                 )) && status="${MAGENTA}!${row_end}"
-
-        # Cursor row: cyan ▍ bar then REVERSE; path in cyan
-        if (( vi == CURSOR )); then
-            local path_col="${CYAN}$(fit "$path" "$pw")${RESET}${REVERSE}"
-            printf '%s▍%s' "$CYAN" "$RESET$REVERSE"
+        # 4-char status label
+        local status
+        if   (( RM[i] && RH[i] )) && [[ "${RW[$i]}" != "true" ]] && (( !RU[i] )); then
+            status="${LIME}SLIM${RESET}"
+        elif [[ "${RW[$i]}" == "true" ]]; then
+            status="${INK_MUTE}done${RESET}"
+        elif (( !RH[i] )); then
+            status="${AMBER}n/rm${RESET}"
+        elif (( RU[i] )); then
+            status="${MAGENTA}push${RESET}"
         else
-            local path_col="$(fit "$path" "$pw")"
-            printf ' '
+            status="    "
         fi
 
+        # Size: magenta when marked (layout-demo: .row.marked .size { color: magenta })
+        local size_col
+        (( RM[i] )) && size_col="$(fmt_size "${RS[$i]}" "$MAGENTA")" \
+                    || size_col="$(fmt_size "${RS[$i]}")"
+
+        # Ages: right-aligned, ink-mute (layout-demo: .num right-align, .age ink-mute)
         local touch_age=9999
         (( RF[i] > 0 )) && touch_age=$(( (now_d - RF[i]) / 86400 ))
+        local commit_col touch_col
+        commit_col="${INK_MUTE}$(printf '%15s' "$(fmt_age "${RA[$i]}")")${RESET}"
+        touch_col="${INK_MUTE}$(printf '%15s' "$(fmt_age "$touch_age")")${RESET}"
 
-        printf "%s ${path_col}  %s  %-15s  %-15s  %s " \
+        # Cursor row: cyan │ bar + cyan mark and path; normal rows: muted brackets
+        local mark path_col
+        if (( vi == CURSOR )); then
+            printf '%s│%s' "$CYAN" "$RESET"
+            (( RM[i] )) && mark="${CYAN}[${MAGENTA}*${CYAN}]${RESET}" \
+                        || mark="${CYAN}[ ]${RESET}"
+            path_col="${CYAN}$(fit "$path" "$pw")${RESET}"
+        else
+            printf ' '
+            (( RM[i] )) && mark="[${MAGENTA}*${RESET}]" \
+                        || mark="${INK_MUTE}[ ]${RESET}"
+            path_col="$(fit "$path" "$pw")"
+        fi
+
+        printf "%s ${path_col}  %s  %s  %s  %s " \
             "$mark" \
-            "$(fmt_size "${RS[$i]}")" \
-            "$(fmt_age "${RA[$i]}")" \
-            "$(fmt_age "$touch_age")" \
+            "$size_col" \
+            "$commit_col" \
+            "$touch_col" \
             "$status"
         tput el 2>/dev/null
-        (( vi == CURSOR )) && printf '%s' "$RESET"
         printf '\n'
         (( row++ ))
     done
@@ -251,10 +282,10 @@ draw() {
     if (( footer_h == 3 )); then
         printf '\n'
         local legend=""
-        (( has_shallow  )) && legend+=" ${LIME}✓${INK_MUTE} shallow${RESET}"
-        (( has_noremote )) && legend+="${INK_MUTE}  ${AMBER}⚠${INK_MUTE} no remote${RESET}"
-        (( has_unpushed )) && legend+="${INK_MUTE}  ${MAGENTA}!${INK_MUTE} unpushed commits${RESET}"
-        printf "${INK_MUTE}%s${RESET}" "$legend"
+        (( has_shallow  )) && legend+=" ${INK_MUTE}done${RESET}${INK_MUTE}=already shallow${RESET}"
+        (( has_noremote )) && legend+="${INK_MUTE}  ${AMBER}n/rm${RESET}${INK_MUTE}=no remote${RESET}"
+        (( has_unpushed )) && legend+="${INK_MUTE}  ${MAGENTA}push${RESET}${INK_MUTE}=push first${RESET}"
+        printf "%s" "$legend"
         tput el 2>/dev/null
     fi
     # No trailing newline — printing past the last row scrolls the terminal
@@ -386,6 +417,7 @@ do_slim() {
             RW[$i]="true"
             RM[$i]=0
             local saved=$(( size_before - size_after ))
+            (( saved > 0 )) && (( TOTAL_FREED += saved ))
             printf "  ${LIME}✓ Done${RESET} — saved $(fmt_size $saved)\n"
         else
             printf "  ${MAGENTA}✗ Failed${RESET}: git pull returned an error\n"
@@ -396,54 +428,69 @@ do_slim() {
     IFS= read -r -s -n1
 
     tput smcup; tput civis; stty cbreak -echo 2>/dev/null
+    printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1007l'
     do_sort
 }
 
-# ── Scan phase ─────────────────────────────────────────────────────────────────
-scan() {
-    local now; now=$(date +%s)
+# ── Cache ─────────────────────────────────────────────────────────────────────
+# Format: one record per line, tab-separated:
+#   <repo_path>\t<git_mtime>\t<size_kb>\t<age_days>\t<has_remote>\t<is_shallow>\t<unpushed>\t<last_mod>
+load_cache() {
+    [[ ! -f "$CACHE_FILE" ]] && return
+    local path mtime kb age hr sh up lm
+    while IFS=$'\t' read -r path mtime kb age hr sh up lm; do
+        [[ -z "$path" ]] && continue
+        CACHE_KEYS+=("$path")
+        CACHE_VALS+=("${mtime}"$'\t'"${kb}"$'\t'"${age}"$'\t'"${hr}"$'\t'"${sh}"$'\t'"${up}"$'\t'"${lm}")
+    done < "$CACHE_FILE"
+}
 
+save_cache() {
+    mkdir -p "$(dirname "$CACHE_FILE")" 2>/dev/null || return
+    local tmp="${CACHE_FILE}.tmp"
+    local i n=${#RP[@]} mtime
+    : > "$tmp" || return
+    for (( i = 0; i < n; i++ )); do
+        # Skip unenriched entries (kb still 0)
+        (( RS[i] == 0 )) && continue
+        mtime=$(stat -f '%m' "${RP[$i]}/.git" 2>/dev/null) || mtime=0
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "${RP[$i]}" "$mtime" "${RS[$i]}" "${RA[$i]}" \
+            "${RH[$i]}" "${RW[$i]}" "${RU[$i]}" "${RF[$i]}" >> "$tmp"
+    done
+    mv "$tmp" "$CACHE_FILE" 2>/dev/null
+}
+
+# Look up a repo in the cache. If found AND .git mtime matches, populate the
+# data arrays at index $1 and return 0 (cache hit). Otherwise return 1.
+cache_lookup() {
+    local idx=$1 repo="${RP[$1]}"
+    local current_mtime
+    current_mtime=$(stat -f '%m' "$repo/.git" 2>/dev/null) || return 1
+
+    local i n=${#CACHE_KEYS[@]}
+    for (( i = 0; i < n; i++ )); do
+        [[ "${CACHE_KEYS[$i]}" != "$repo" ]] && continue
+        local mtime kb age hr sh up lm
+        IFS=$'\t' read -r mtime kb age hr sh up lm <<< "${CACHE_VALS[$i]}"
+        [[ "$mtime" != "$current_mtime" ]] && return 1
+        RS[$idx]="$kb"; RA[$idx]="$age"; RH[$idx]="$hr"
+        RW[$idx]="$sh"; RU[$idx]="$up"; RF[$idx]="$lm"
+        return 0
+    done
+    return 1
+}
+
+# ── Scan phase 1: discover repos (cheap; just `find`) ─────────────────────────
+discover_repos() {
     while IFS= read -r git_dir; do
         [[ ! -d "$git_dir" ]] && continue          # skip submodule .git files
         local repo="${git_dir%/.git}"
         [[ ! -d "$repo"    ]] && continue
 
-        local kb
-        kb=$(du -sk "$git_dir" 2>/dev/null | cut -f1) || continue
-        [[ -z "$kb" ]] && continue
-
-        local ts; ts=$(git -C "$repo" log -1 --format="%at" 2>/dev/null || true)
-        local age=9999
-        [[ "$ts" =~ ^[0-9]+$ ]] && age=$(( (now - ts) / 86400 ))
-
-        local shallow
-        shallow=$(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null || echo "false")
-
-        local nremotes
-        nremotes=$(git -C "$repo" remote 2>/dev/null | wc -l | tr -d '[:space:]')
-        local has_remote=0; (( nremotes > 0 )) && has_remote=1
-
-        local unpushed=0
-        local ahead
-        ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) \
-            && (( ahead > 0 )) && unpushed=1 || true
-
-        local last_mod=0 fmod
-        fmod=$(find "$repo" -not -path '*/.git*' -type f \
-                   -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)
-        [[ "$fmod" =~ ^[0-9]+$ ]] && last_mod=$fmod
-
-        RP+=("$repo"); RS+=("$kb"); RA+=("$age")
-        RH+=("$has_remote"); RW+=("$shallow"); RU+=("$unpushed"); RF+=("$last_mod"); RM+=(0)
-        RI+=("$(( ${#RP[@]} - 1 ))")   # discovery order; do_sort() re-orders after scan
-
-        draw
-
-        # Non-blocking quit check (works because terminal is in cbreak mode)
-        if IFS= read -r -s -n1 -t 0 REPLY 2>/dev/null; then
-            case "$REPLY" in q|Q|$'\x03') return 1 ;; esac
-        fi
-
+        RP+=("$repo")
+        RS+=(0); RA+=(9999); RH+=(0); RW+=("false"); RU+=(0); RF+=(0); RM+=(0)
+        RI+=("$(( ${#RP[@]} - 1 ))")
     done < <(
         find "$SEARCH_ROOT" \
             \( -path '*/node_modules' \
@@ -453,6 +500,59 @@ scan() {
             \) -prune \
             -o -type d -name '.git' -print 2>/dev/null
     )
+}
+
+# ── Scan phase 2: enrich one repo with sizes/ages/remote/etc ──────────────────
+enrich_repo() {
+    local i=$1 now=$2
+    local repo="${RP[$i]}"
+
+    # Cache hit: skip the expensive work
+    cache_lookup "$i" && return
+
+    local kb
+    kb=$(du -sk "$repo/.git" 2>/dev/null | cut -f1) || kb=0
+    [[ -z "$kb" ]] && kb=0
+    RS[$i]="$kb"
+
+    local ts; ts=$(git -C "$repo" log -1 --format="%at" 2>/dev/null || true)
+    [[ "$ts" =~ ^[0-9]+$ ]] && RA[$i]=$(( (now - ts) / 86400 ))
+
+    RW[$i]=$(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null || echo "false")
+
+    local nremotes
+    nremotes=$(git -C "$repo" remote 2>/dev/null | wc -l | tr -d '[:space:]')
+    (( nremotes > 0 )) && RH[$i]=1
+
+    local ahead
+    ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) \
+        && (( ahead > 0 )) && RU[$i]=1 || true
+
+    local fmod
+    fmod=$(find "$repo" -not -path '*/.git*' -type f \
+               -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)
+    [[ "$fmod" =~ ^[0-9]+$ ]] && RF[$i]="$fmod"
+}
+
+scan() {
+    local now; now=$(date +%s)
+    load_cache
+
+    discover_repos
+    draw   # show full list with placeholder data immediately
+
+    local i n=${#RP[@]}
+    for (( i = 0; i < n; i++ )); do
+        enrich_repo "$i" "$now"
+        draw
+
+        # Non-blocking quit check
+        if IFS= read -r -s -n1 -t 0 REPLY 2>/dev/null; then
+            case "$REPLY" in q|Q|$'\x03') return 1 ;; esac
+        fi
+    done
+
+    save_cache
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -479,6 +579,7 @@ LOGO
     tput civis
     tput rmam 2>/dev/null || true
     stty cbreak -echo 2>/dev/null   # cbreak: per-char delivery; needed for read -t 0
+    printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1007l'  # disable all mouse
 
     SCANNING=1
     scan || { _cleanup; exit 0; }   # return 1 means user quit during scan
