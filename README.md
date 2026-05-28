@@ -9,28 +9,41 @@ An interactive TUI tool for finding git repositories and converting them to shal
 The slim operation uses:
 
 ```bash
-git pull --depth 1          # re-fetch with depth 1, discarding old history
+git pull --depth 1          # re-fetch with shallow history, discarding old commits
 git tag -d $(git tag -l)    # remove all tags (they hold references to old objects)
 git reflog expire --expire=all --all
 git gc --prune=all          # garbage-collect unreachable objects
 ```
+
+The depth defaults to 1 but is configurable — see [Configuration](#configuration).
 
 This matches the technique from [afriza's gist](https://gist.github.com/afriza/6c13369d060c3361a06892e039ab9cf0).
 
 ## Requirements
 
 - bash 3.0+ (macOS ships with 3.2, so no extra install needed)
-- Standard Unix tools: `git`, `find`, `du`, `tput`, `sort`
+- Standard Unix tools: `git`, `find`, `du`, `tput`, `stty`, `sort`
 - A terminal with ANSI color support
 
 ## Installation
+
+### Symlink from a clone (recommended)
+
+Cloning and symlinking means `git pull` keeps the installed copy up to date automatically:
+
+```bash
+git clone https://github.com/georgestephanis/gitslim.git
+ln -s "$PWD/gitslim/gitslim" /usr/local/bin/gitslim
+```
+
+Use `~/bin/gitslim` instead if that's on your `$PATH` and you prefer a user-local install.
+
+### Copy
 
 ```bash
 cp gitslim /usr/local/bin/gitslim
 chmod +x /usr/local/bin/gitslim
 ```
-
-Or anywhere else on your `$PATH`.
 
 ## Usage
 
@@ -51,15 +64,40 @@ gitslim ~/code     # scan a specific directory
 | `P` | Sort by path (alphabetical) |
 | `Q` or `Ctrl-C` | Quit |
 
-### What gets skipped
+### Status indicators
 
-- Repos already marked as shallow (`git rev-parse --is-shallow-repository` returns `true`)
-- Repos with no remote (slimming requires `git pull`)
-- Repos with uncommitted changes (to avoid data loss)
+A symbol appears at the right of each row when the repo has a notable state. A legend is shown at the bottom of the screen whenever any indicator is in use:
+
+| Symbol | Meaning |
+|--------|---------|
+| `✓` | Already a shallow clone — nothing to do |
+| `⚠` | No remote configured — cannot slim |
+| `!` | Has unpushed commits — slim is blocked until they are pushed |
+
+### What gets skipped during slimming
+
+- Repos already marked as shallow
+- Repos with no remote (`git pull` requires one)
+- Repos with uncommitted changes
+- Repos with local commits not yet pushed upstream (would be lost)
+
+## Configuration
+
+Create `~/.config/gitslim/config` (or `~/.gitslim`) to customise the slim depth:
+
+```ini
+# Keep the last 5 commits locally instead of just 1
+depth = 5
+
+# — or — keep everything from the last 3 months:
+# since = 3m
+```
+
+`since` accepts shorthand (`Nd`, `Nw`, `Nm`, `Ny` for days/weeks/months/years) or any git-understood date string (`2024-01-01`, `6 months ago`). When `since` is set it takes precedence over `depth`.
 
 ## Caveats
 
-- **Slimming is destructive.** It removes all commit history beyond the latest commit. You cannot recover old history without re-cloning.
-- **Requires network access** during the slim operation (`git pull --depth 1` fetches from the remote).
+- **Slimming is destructive.** It removes commit history beyond the configured depth. You cannot recover old history without re-cloning.
+- **Requires network access** during the slim operation (`git pull` fetches from the remote).
 - **Tags are deleted.** If you care about tags, back them up first or don't slim that repo.
 - Repos in detached HEAD state or with complex merge situations may fail; the error output from git is shown so you can diagnose.

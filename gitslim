@@ -15,6 +15,15 @@ fi
 
 SEARCH_ROOT="${1:-$HOME}"
 
+# ── Debug log ──────────────────────────────────────────────────────────────────
+# Set to a path (e.g. /tmp/gitslim-debug.log) to enable; empty to disable.
+DEBUG_LOG=""
+_log() {
+    [[ -z "$DEBUG_LOG" ]] && return
+    printf '%s %s\n' "$(date '+%T')" "$*" >> "$DEBUG_LOG"
+}
+[[ -n "$DEBUG_LOG" ]] && : > "$DEBUG_LOG"
+
 # ── ANSI ───────────────────────────────────────────────────────────────────────
 ESC=$'\033'
 BOLD="${ESC}[1m" DIM="${ESC}[2m" RESET="${ESC}[0m" REVERSE="${ESC}[7m"
@@ -30,6 +39,7 @@ declare -a RS=()   # .git size in KB
 declare -a RA=()   # age in days since last commit
 declare -a RH=()   # has remote: 1/0
 declare -a RW=()   # is shallow: true/false
+declare -a RU=()   # has unpushed commits: 1/0
 declare -a RM=()   # marked: 1/0
 declare -a RI=()   # sorted indices into above arrays
 
@@ -41,11 +51,14 @@ SINCE=""   # keep history since date/period (overrides DEPTH when set)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 _cleanup() {
+    tput smam  2>/dev/null || true   # re-enable line wrap
     tput rmcup 2>/dev/null || true
     tput cnorm 2>/dev/null || true
     stty echo  2>/dev/null || true
 }
-trap _cleanup EXIT INT TERM
+trap _cleanup EXIT
+trap '_log "received SIGINT";  exit 130' INT
+trap '_log "received SIGTERM"; exit 143' TERM
 
 # ── Formatting ─────────────────────────────────────────────────────────────────
 fmt_size() {
@@ -105,26 +118,37 @@ do_sort() {
 }
 
 # ── TUI drawing ────────────────────────────────────────────────────────────────
-HEADER_H=4; FOOTER_H=2
+HEADER_H=4   # title + sep + col-headers + sep
+# FOOTER_H is computed dynamically in draw() (2 baseline + 1 if legend needed)
 
 draw() {
-    local cols rows vrows
+    local cols rows
     cols=$(_cols); rows=$(_rows)
-    vrows=$(( rows - HEADER_H - FOOTER_H ))
-    (( vrows < 1 )) && vrows=1
 
-    local n=${#RI[@]} mc=0 ms=0
+    local n=${#RI[@]} mc=0 ms=0 has_noremote=0 has_shallow=0 has_unpushed=0
     for i in "${RI[@]}"; do
-        if (( RM[i] )); then (( mc++ )); (( ms += RS[i] )); fi
+        (( RM[i]          )) && { (( mc++ )); (( ms += RS[i] )); }
+        (( RH[i] == 0     )) && has_noremote=1
+        [[ "${RW[$i]}" == "true" ]] && has_shallow=1
+        (( RU[i]          )) && has_unpushed=1
     done
+
+    # Footer is 2 lines (sep + keys) plus 1 if any legend symbols are in use
+    local footer_h=2
+    (( has_noremote || has_shallow || has_unpushed )) && (( footer_h++ ))
+
+    local vrows=$(( rows - HEADER_H - footer_h ))
+    (( vrows < 1 )) && vrows=1
 
     # Clamp scroll so cursor stays visible
     (( CURSOR < SCROLL          )) && SCROLL=$CURSOR
     (( CURSOR >= SCROLL + vrows )) && SCROLL=$(( CURSOR - vrows + 1 ))
     (( SCROLL < 0               )) && SCROLL=0
 
-    local pw=$(( cols - 38 ))   # path column width
-    (( pw < 15 )) && pw=15
+    # Row layout: " [M] <path>  <size>  <age>  <status> "
+    # Fixed visible chars outside path: 1+3+1 + 2+8 + 2+15 + 2+1+1 = 36
+    local pw=$(( cols - 36 ))
+    (( pw < 12 )) && pw=12
 
     tput cup 0 0
 
@@ -132,12 +156,12 @@ draw() {
     local marked_str=""
     (( mc > 0 )) && marked_str="  ·  ${mc} marked ($(fmt_size $ms))"
     printf "${BOLD}${CYAN}gitslim${RESET}  ·  %d repos  ·  sort:%s%s" "$n" "$SORT_BY" "$marked_str"
-    printf '%*s\n' $(( cols - 24 - ${#SORT_BY} - ${#marked_str} )) ''
+    tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
     # ── Column headers ──
-    printf "${DIM}  %-*s  %8s  %-15s  %-7s${RESET}\n" \
-        "$pw" "PATH" "GIT SIZE" "LAST COMMIT" "SHALLOW"
+    printf "${DIM}     %-*s  %8s  %-15s${RESET}" "$pw" "PATH" "GIT SIZE" "LAST COMMIT"
+    tput el 2>/dev/null; printf '\n'
     _sep "$cols"
 
     # ── Repo rows ──
@@ -149,36 +173,58 @@ draw() {
         local i="${RI[$vi]}"
         local path="${RP[$i]/#$HOME/\~}"
         local mark="[ ]"; (( RM[i] )) && mark="[${GREEN}*${RESET}]"
-        local sflag="no"; [[ "${RW[$i]}" == "true" ]] && sflag="${DIM}yes${RESET}"
-        local noremote=""; (( RH[i] )) || noremote=" ${DIM}[no remote]${RESET}"
+        local status=" "
+        (( RH[i] == 0         )) && status="⚠"
+        [[ "${RW[$i]}" == "true" ]] && status="✓"
+        (( RU[i]              )) && status="!"
 
         (( vi == CURSOR )) && printf '%s' "$REVERSE"
-        printf " %s $(fit "$path" "$pw")  %s  %-15s  %-7s%s" \
+        printf " %s $(fit "$path" "$pw")  %s  %-15s  %s " \
             "$mark" \
             "$(fmt_size "${RS[$i]}")" \
             "$(fmt_age "${RA[$i]}")" \
-            "$sflag" \
-            "$noremote"
+            "$status"
+        tput el 2>/dev/null   # erase to EOL; also extends reverse highlight on cursor row
         (( vi == CURSOR )) && printf '%s' "$RESET"
         printf '\n'
         (( row++ ))
     done
 
     # Fill blank rows so stale content doesn't show
-    for (( ; row < vrows; row++ )); do printf '%*s\n' "$cols" ''; done
+    for (( ; row < vrows; row++ )); do
+        tput el 2>/dev/null; printf '\n'
+    done
 
     # ── Footer ──
     _sep "$cols"
-    printf " ${DIM}↑↓/jk${RESET} move  ${DIM}SPC${RESET} mark  ${DIM}S${RESET} slim  ${DIM}R${RESET} age  ${DIM}Z${RESET} size  ${DIM}P${RESET} path  ${DIM}Q${RESET} quit\n"
+    printf " ${DIM}↑↓/jk${RESET} move  ${DIM}SPC${RESET} mark  ${DIM}S${RESET} slim  ${DIM}R${RESET} age  ${DIM}Z${RESET} size  ${DIM}P${RESET} path  ${DIM}Q${RESET} quit"
+    tput el 2>/dev/null
+    if (( footer_h == 3 )); then
+        printf '\n'
+        local legend=""
+        (( has_shallow  )) && legend+=" ${DIM}✓ shallow${RESET}"
+        (( has_noremote )) && legend+=" ${DIM}⚠ no remote${RESET}"
+        (( has_unpushed )) && legend+=" ${DIM}! unpushed commits${RESET}"
+        printf "%s" "$legend"
+        tput el 2>/dev/null
+    fi
+    # No trailing newline — printing past the last row scrolls the terminal
 }
 
 # ── Key input ──────────────────────────────────────────────────────────────────
 read_key() {
-    local _seq
+    local _c
     IFS= read -r -s -n1 REPLY
     if [[ $REPLY == $'\033' ]]; then
-        IFS= read -r -s -n2 -t 0.1 _seq 2>/dev/null || true
-        REPLY="${REPLY}${_seq}"
+        # bash 3.x only supports integer -t values; use 1 second.
+        # Arrow-key bytes are already buffered so this returns instantly.
+        IFS= read -r -s -n1 -t 1 _c 2>/dev/null && {
+            REPLY="${REPLY}${_c}"
+            # CSI (\033[) and SS3 (\033O) are always followed by one more byte
+            if [[ $_c == '[' || $_c == 'O' ]]; then
+                IFS= read -r -s -n1 -t 1 _c 2>/dev/null && REPLY="${REPLY}${_c}"
+            fi
+        } || true
     fi
 }
 
@@ -259,6 +305,14 @@ do_slim() {
             continue
         fi
 
+        # Bail if local commits haven't been pushed (they would be lost)
+        local ahead
+        ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) || ahead=0
+        if (( ahead > 0 )); then
+            printf "  ${YELLOW}⚠ Skipped${RESET}: %d unpushed commit(s) — push first\n" "$ahead"
+            continue
+        fi
+
         local size_before="${RS[$i]}" ok=1
 
         local -a depth_args
@@ -322,8 +376,13 @@ scan() {
         nremotes=$(git -C "$repo" remote 2>/dev/null | wc -l | tr -d '[:space:]')
         local has_remote=0; (( nremotes > 0 )) && has_remote=1
 
+        local unpushed=0
+        local ahead
+        ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) \
+            && (( ahead > 0 )) && unpushed=1 || true
+
         RP+=("$repo"); RS+=("$kb"); RA+=("$age")
-        RH+=("$has_remote"); RW+=("$shallow"); RM+=(0)
+        RH+=("$has_remote"); RW+=("$shallow"); RU+=("$unpushed"); RM+=(0)
 
         printf "\r  Scanning… found %d repositories" "${#RP[@]}" >&2
 
@@ -343,6 +402,7 @@ scan() {
 # ── Main ───────────────────────────────────────────────────────────────────────
 main() {
     load_config
+    _log "startup: bash=$BASH_VERSION TERM=${TERM:-unset}"
     printf "${BOLD}${CYAN}gitslim${RESET}  —  scanning %s\n" "$SEARCH_ROOT"
     scan
     do_sort
@@ -354,6 +414,7 @@ main() {
 
     tput smcup
     tput civis
+    tput rmam 2>/dev/null || true   # disable line wrap; overflow clips instead
     stty -echo
 
     while true; do
@@ -368,7 +429,7 @@ main() {
             ' ')            # toggle mark
                 local i="${RI[$CURSOR]}"
                 RM[$i]=$(( 1 - RM[i] )) ;;
-            s|S)  do_slim ;;
+            s|S)  _log "slimming marked repos"; do_slim ;;
             r|R)  SORT_BY=age;  CURSOR=0; SCROLL=0; do_sort ;;
             z|Z)  SORT_BY=size; CURSOR=0; SCROLL=0; do_sort ;;
             p|P)  SORT_BY=path; CURSOR=0; SCROLL=0; do_sort ;;
