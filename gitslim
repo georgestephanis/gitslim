@@ -29,6 +29,10 @@ declare -a RI=()   # sorted indices into above arrays
 
 CURSOR=0; SCROLL=0; SORT_BY=age
 
+# Config (overridden by load_config)
+DEPTH=1    # commits to keep (--depth N)
+SINCE=""   # keep history since date/period (overrides DEPTH when set)
+
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 _cleanup() {
     tput rmcup 2>/dev/null || true
@@ -173,6 +177,58 @@ read_key() {
     printf '%s' "$key"
 }
 
+# ── Config loading ─────────────────────────────────────────────────────────────
+# Reads ~/.config/gitslim/config or ~/.gitslim.
+# Supported keys:
+#   depth = N          keep N commits (default: 1)
+#   since = <spec>     keep history since a date; overrides depth when set
+#                      Shorthand: Nd (days), Nw (weeks), Nm (months), Ny (years)
+#                      Or any git-understood date: "2024-01-01", "6 months ago"
+load_config() {
+    local cfg=""
+    for f in "$HOME/.config/gitslim/config" "$HOME/.gitslim"; do
+        [[ -f "$f" ]] && cfg="$f" && break
+    done
+    [[ -z "$cfg" ]] && return
+
+    while IFS= read -r line; do
+        line="${line%%#*}"                                      # strip inline comments
+        line="${line#"${line%%[![:space:]]*}"}"                 # ltrim
+        line="${line%"${line##*[![:space:]]}"}"                 # rtrim
+        [[ -z "$line" || "$line" != *=* ]] && continue
+        local key="${line%%=*}" val="${line#*=}"
+        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+        val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+        val="${val#\"}"; val="${val%\"}"                        # strip optional quotes
+        val="${val#\'}"; val="${val%\'}"
+        case "$key" in
+            depth)
+                if [[ "$val" =~ ^[1-9][0-9]*$ ]]; then
+                    DEPTH="$val"
+                else
+                    printf "gitslim: config: invalid depth '%s', using default\n" "$val" >&2
+                fi ;;
+            since) SINCE="$val" ;;
+        esac
+    done < "$cfg"
+}
+
+# Expand shorthand period specs (30d, 4w, 6m, 1y) to git date strings.
+_since_str() {
+    local spec="$1"
+    if [[ "$spec" =~ ^([0-9]+)([dwmy])$ ]]; then
+        local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+        case "$unit" in
+            d) printf '%d days ago'   "$n" ;;
+            w) printf '%d weeks ago'  "$n" ;;
+            m) printf '%d months ago' "$n" ;;
+            y) printf '%d years ago'  "$n" ;;
+        esac
+    else
+        printf '%s' "$spec"
+    fi
+}
+
 # ── Slim operation ─────────────────────────────────────────────────────────────
 do_slim() {
     local to_slim=()
@@ -200,7 +256,14 @@ do_slim() {
 
         local size_before="${RS[$i]}" ok=1
 
-        git -C "$repo" pull --depth 1 2>&1 | sed 's/^/  /' || ok=0
+        local -a depth_args
+        if [[ -n "$SINCE" ]]; then
+            depth_args=("--shallow-since=$(_since_str "$SINCE")")
+        else
+            depth_args=("--depth" "$DEPTH")
+        fi
+
+        git -C "$repo" pull "${depth_args[@]}" 2>&1 | sed 's/^/  /' || ok=0
 
         if (( ok )); then
             local tags; tags=$(git -C "$repo" tag -l 2>/dev/null || true)
@@ -274,6 +337,7 @@ scan() {
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 main() {
+    load_config
     printf "${BOLD}${CYAN}gitslim${RESET}  —  scanning %s\n" "$SEARCH_ROOT"
     scan
     do_sort
