@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# gitslim — interactively find and slim git repositories to shallow clones
+#
+# Usage: gitslim [search-root]   (default: $HOME)
+#
+# Keys: ↑/↓ or j/k navigate · SPACE mark · S slim marked · R age · Z size · P path · Q quit
+
+set -uo pipefail
+
+SEARCH_ROOT="${1:-$HOME}"
+
+# ── ANSI ───────────────────────────────────────────────────────────────────────
+ESC=$'\033'
+BOLD="${ESC}[1m" DIM="${ESC}[2m" RESET="${ESC}[0m" REVERSE="${ESC}[7m"
+RED="${ESC}[31m" GREEN="${ESC}[32m" YELLOW="${ESC}[33m" CYAN="${ESC}[36m"
+
+_rows() { tput lines 2>/dev/null || echo 24; }
+_cols() { tput cols  2>/dev/null || echo 80; }
+_sep()  { printf '─%.0s' $(seq 1 "${1:-$(_cols)}"); printf '\n'; }
+
+# ── Data arrays ────────────────────────────────────────────────────────────────
+declare -a RP=()   # repo path
+declare -a RS=()   # .git size in KB
+declare -a RA=()   # age in days since last commit
+declare -a RH=()   # has remote: 1/0
+declare -a RW=()   # is shallow: true/false
+declare -a RM=()   # marked: 1/0
+declare -a RI=()   # sorted indices into above arrays
+
+CURSOR=0; SCROLL=0; SORT_BY=age
+
+# ── Cleanup ────────────────────────────────────────────────────────────────────
+_cleanup() {
+    tput rmcup 2>/dev/null || true
+    tput cnorm 2>/dev/null || true
+    stty echo  2>/dev/null || true
+}
+trap _cleanup EXIT INT TERM
+
+# ── Formatting ─────────────────────────────────────────────────────────────────
+fmt_size() {
+    local kb=$1
+    if   (( kb < 1024    )); then printf '%5d KB' "$kb"
+    elif (( kb < 1048576 )); then printf '%5d MB' "$((kb / 1024))"
+    else                          printf '%5d GB' "$((kb / 1048576))"
+    fi
+}
+
+fmt_age() {
+    local d=$1
+    if   (( d == 0  )); then printf 'today'
+    elif (( d == 1  )); then printf '1 day ago'
+    elif (( d <  7  )); then printf '%d days ago'   "$d"
+    elif (( d <  14 )); then printf '1 week ago'
+    elif (( d <  30 )); then printf '%d weeks ago'  "$((d / 7))"
+    elif (( d <  60 )); then printf '1 month ago'
+    elif (( d < 365 )); then printf '%d months ago' "$((d / 30))"
+    elif (( d < 730 )); then printf '1 year ago'
+    else                     printf '%d years ago'  "$((d / 365))"
+    fi
+}
+
+# Truncate/pad string to exact width (handles ~ paths)
+fit() {
+    local s="$1" w=$2
+    if (( ${#s} > w )); then printf '%s…' "${s:0:$((w - 1))}"
+    else printf '%-*s' "$w" "$s"
+    fi
+}
+
+# ── Sorting ────────────────────────────────────────────────────────────────────
+do_sort() {
+    local n=${#RP[@]}; RI=()
+    (( n == 0 )) && return
+
+    local tmp; tmp=$(mktemp)
+    # age/size: descending (oldest/largest first); path: ascending
+    for (( i = 0; i < n; i++ )); do
+        case "$SORT_BY" in
+            age)  printf '%010d\t%d\n' "${RA[$i]}" "$i" ;;
+            size) printf '%015d\t%d\n' "${RS[$i]}" "$i" ;;
+            path) printf '%s\t%d\n'   "${RP[$i]}" "$i" ;;
+        esac
+    done | if [[ "$SORT_BY" == path ]]; then sort -t$'\t' -k1
+           else sort -t$'\t' -k1 -r
+           fi > "$tmp"
+
+    RI=()
+    while IFS=$'\t' read -r _ idx; do RI+=("$idx"); done < "$tmp"
+    rm -f "$tmp"
+
+    local max=$(( ${#RI[@]} - 1 ))
+    (( CURSOR > max )) && CURSOR=$max
+    (( CURSOR < 0   )) && CURSOR=0
+}
+
+# ── TUI drawing ────────────────────────────────────────────────────────────────
+HEADER_H=4; FOOTER_H=2
+
+draw() {
+    local cols rows vrows
+    cols=$(_cols); rows=$(_rows)
+    vrows=$(( rows - HEADER_H - FOOTER_H ))
+    (( vrows < 1 )) && vrows=1
+
+    local n=${#RI[@]} mc=0 ms=0
+    for i in "${RI[@]}"; do
+        if (( RM[i] )); then (( mc++ )); (( ms += RS[i] )); fi
+    done
+
+    # Clamp scroll so cursor stays visible
+    (( CURSOR < SCROLL          )) && SCROLL=$CURSOR
+    (( CURSOR >= SCROLL + vrows )) && SCROLL=$(( CURSOR - vrows + 1 ))
+    (( SCROLL < 0               )) && SCROLL=0
+
+    local pw=$(( cols - 38 ))   # path column width
+    (( pw < 15 )) && pw=15
+
+    tput cup 0 0
+
+    # ── Header ──
+    local marked_str=""
+    (( mc > 0 )) && marked_str="  ·  ${mc} marked ($(fmt_size $ms))"
+    printf "${BOLD}${CYAN}gitslim${RESET}  ·  %d repos  ·  sort:%s%s" "$n" "$SORT_BY" "$marked_str"
+    printf '%*s\n' $(( cols - 24 - ${#SORT_BY} - ${#marked_str} )) ''
+    _sep "$cols"
+
+    # ── Column headers ──
+    printf "${DIM}  %-*s  %8s  %-15s  %-7s${RESET}\n" \
+        "$pw" "PATH" "GIT SIZE" "LAST COMMIT" "SHALLOW"
+    _sep "$cols"
+
+    # ── Repo rows ──
+    local end=$(( SCROLL + vrows ))
+    (( end > n )) && end=$n
+    local row=0
+
+    for (( vi = SCROLL; vi < end; vi++ )); do
+        local i="${RI[$vi]}"
+        local path="${RP[$i]/#$HOME/\~}"
+        local mark="[ ]"; (( RM[i] )) && mark="[${GREEN}*${RESET}]"
+        local sflag="no"; [[ "${RW[$i]}" == "true" ]] && sflag="${DIM}yes${RESET}"
+        local noremote=""; (( RH[i] )) || noremote=" ${DIM}[no remote]${RESET}"
+
+        (( vi == CURSOR )) && printf '%s' "$REVERSE"
+        printf " %s $(fit "$path" "$pw")  %s  %-15s  %-7s%s" \
+            "$mark" \
+            "$(fmt_size "${RS[$i]}")" \
+            "$(fmt_age "${RA[$i]}")" \
+            "$sflag" \
+            "$noremote"
+        (( vi == CURSOR )) && printf '%s' "$RESET"
+        printf '\n'
+        (( row++ ))
+    done
+
+    # Fill blank rows so stale content doesn't show
+    for (( ; row < vrows; row++ )); do printf '%*s\n' "$cols" ''; done
+
+    # ── Footer ──
+    _sep "$cols"
+    printf " ${DIM}↑↓/jk${RESET} move  ${DIM}SPC${RESET} mark  ${DIM}S${RESET} slim  ${DIM}R${RESET} age  ${DIM}Z${RESET} size  ${DIM}P${RESET} path  ${DIM}Q${RESET} quit\n"
+}
+
+# ── Key input ──────────────────────────────────────────────────────────────────
+read_key() {
+    local key seq
+    IFS= read -r -s -n1 key
+    if [[ $key == $'\033' ]]; then
+        IFS= read -r -s -n2 -t 0.1 seq 2>/dev/null || true
+        key="${key}${seq}"
+    fi
+    printf '%s' "$key"
+}
+
+# ── Slim operation ─────────────────────────────────────────────────────────────
+do_slim() {
+    local to_slim=()
+    for i in "${RI[@]}"; do
+        if (( RM[i] && RH[i] )) && [[ "${RW[$i]}" != "true" ]]; then
+            to_slim+=("$i")
+        fi
+    done
+    (( ${#to_slim[@]} == 0 )) && return
+
+    tput rmcup; tput cnorm
+
+    printf "\n${BOLD}${CYAN}gitslim — slimming %d repo(s)${RESET}\n" "${#to_slim[@]}"
+
+    for i in "${to_slim[@]}"; do
+        local repo="${RP[$i]}"
+        printf "\n${BOLD}▸ %s${RESET}\n" "$repo"
+
+        # Bail on dirty working tree
+        if ! git -C "$repo" diff --quiet 2>/dev/null || \
+           ! git -C "$repo" diff --cached --quiet 2>/dev/null; then
+            printf "  ${YELLOW}⚠ Skipped${RESET}: uncommitted changes present\n"
+            continue
+        fi
+
+        local size_before="${RS[$i]}" ok=1
+
+        git -C "$repo" pull --depth 1 2>&1 | sed 's/^/  /' || ok=0
+
+        if (( ok )); then
+            local tags; tags=$(git -C "$repo" tag -l 2>/dev/null || true)
+            if [[ -n "$tags" ]]; then
+                # shellcheck disable=SC2086
+                git -C "$repo" tag -d $tags 2>&1 | sed 's/^/  /' || true
+            fi
+            git -C "$repo" reflog expire --expire=all --all 2>&1 | sed 's/^/  /'
+            git -C "$repo" gc --prune=all 2>&1 | sed 's/^/  /'
+
+            local size_after
+            size_after=$(du -sk "$repo/.git" 2>/dev/null | cut -f1) || size_after=$size_before
+            RS[$i]=$size_after
+            RW[$i]="true"
+            RM[$i]=0
+            local saved=$(( size_before - size_after ))
+            printf "  ${GREEN}✓ Done${RESET} — saved $(fmt_size $saved)\n"
+        else
+            printf "  ${RED}✗ Failed${RESET}: git pull --depth 1 returned an error\n"
+        fi
+    done
+
+    printf "\n${DIM}Press any key to return...${RESET}\n"
+    IFS= read -r -s -n1
+
+    tput smcup; tput civis; stty -echo
+    do_sort
+}
+
+# ── Scan phase ─────────────────────────────────────────────────────────────────
+scan() {
+    local now; now=$(date +%s)
+
+    while IFS= read -r git_dir; do
+        [[ ! -d "$git_dir" ]] && continue          # skip submodule .git files
+        local repo="${git_dir%/.git}"
+        [[ ! -d "$repo"    ]] && continue
+
+        local kb
+        kb=$(du -sk "$git_dir" 2>/dev/null | cut -f1) || continue
+        [[ -z "$kb" ]] && continue
+
+        local ts; ts=$(git -C "$repo" log -1 --format="%at" 2>/dev/null || true)
+        local age=9999
+        [[ "$ts" =~ ^[0-9]+$ ]] && age=$(( (now - ts) / 86400 ))
+
+        local shallow
+        shallow=$(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null || echo "false")
+
+        local nremotes
+        nremotes=$(git -C "$repo" remote 2>/dev/null | wc -l | tr -d '[:space:]')
+        local has_remote=0; (( nremotes > 0 )) && has_remote=1
+
+        RP+=("$repo"); RS+=("$kb"); RA+=("$age")
+        RH+=("$has_remote"); RW+=("$shallow"); RM+=(0)
+
+        printf "\r  Scanning… found %d repositories" "${#RP[@]}" >&2
+
+    done < <(
+        find "$SEARCH_ROOT" \
+            \( -path '*/node_modules' \
+               -o -path '*/.Trash' \
+               -o -path '*/Library/Caches' \
+               -o -path '*/Library/Developer' \
+            \) -prune \
+            -o -type d -name '.git' -print 2>/dev/null
+    )
+
+    printf "\r  Found %d repositories.%20s\n" "${#RP[@]}" '' >&2
+}
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+main() {
+    printf "${BOLD}${CYAN}gitslim${RESET}  —  scanning %s\n" "$SEARCH_ROOT"
+    scan
+    do_sort
+
+    if (( ${#RI[@]} == 0 )); then
+        printf "No git repositories found under %s\n" "$SEARCH_ROOT"
+        exit 0
+    fi
+
+    tput smcup
+    tput civis
+    stty -echo
+
+    while true; do
+        draw
+        local key; key=$(read_key)
+        local n=${#RI[@]}
+        case "$key" in
+            $'\033[A'|k|K)  # up
+                (( CURSOR > 0     )) && (( CURSOR-- )) ;;
+            $'\033[B'|j|J)  # down
+                (( CURSOR < n - 1 )) && (( CURSOR++ )) ;;
+            ' ')            # toggle mark
+                local i="${RI[$CURSOR]}"
+                RM[$i]=$(( 1 - RM[i] )) ;;
+            s|S)  do_slim ;;
+            r|R)  SORT_BY=age;  CURSOR=0; SCROLL=0; do_sort ;;
+            z|Z)  SORT_BY=size; CURSOR=0; SCROLL=0; do_sort ;;
+            p|P)  SORT_BY=path; CURSOR=0; SCROLL=0; do_sort ;;
+            q|Q|$'\x03')  break ;;
+        esac
+    done
+}
+
+main
