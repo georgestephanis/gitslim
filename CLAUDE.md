@@ -4,7 +4,7 @@
 
 `gitslim` is a single-file bash TUI script (`gitslim`) that finds git repositories and converts them to shallow clones. It is modeled on `npkill`.
 
-The installed copy lives at `~/bin/gitslim`. Keep that in sync with `gitslim` in this repo when making changes.
+`~/bin/gitslim` is a symlink to this repo's `gitslim`, so edits here are immediately live.
 
 ## Architecture
 
@@ -45,5 +45,4 @@ All arrays are parallel and indexed by repo number (0..n-1):
 
 After editing, always:
 1. Run `bash -n gitslim` to check syntax.
-2. Copy to `~/bin/gitslim` and test interactively: `gitslim ~/code` is a fast test target.
-3. Commit both files if the installed copy changed.
+2. Test interactively: `gitslim ~/code` is a fast test target.

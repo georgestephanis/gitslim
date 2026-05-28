@@ -20,8 +20,8 @@ ESC=$'\033'
 BOLD="${ESC}[1m" DIM="${ESC}[2m" RESET="${ESC}[0m" REVERSE="${ESC}[7m"
 RED="${ESC}[31m" GREEN="${ESC}[32m" YELLOW="${ESC}[33m" CYAN="${ESC}[36m"
 
-_rows() { tput lines 2>/dev/null || echo 24; }
-_cols() { tput cols  2>/dev/null || echo 80; }
+_rows() { local s; s=$(stty size 2>/dev/null) && printf '%s' "${s% *}" || tput lines 2>/dev/null || printf '24'; }
+_cols() { local s; s=$(stty size 2>/dev/null) && printf '%s' "${s#* }" || tput cols  2>/dev/null || printf '80'; }
 _sep()  { printf '─%.0s' $(seq 1 "${1:-$(_cols)}"); printf '\n'; }
 
 # ── Data arrays ────────────────────────────────────────────────────────────────
@@ -174,13 +174,12 @@ draw() {
 
 # ── Key input ──────────────────────────────────────────────────────────────────
 read_key() {
-    local key seq
-    IFS= read -r -s -n1 key
-    if [[ $key == $'\033' ]]; then
-        IFS= read -r -s -n2 -t 0.1 seq 2>/dev/null || true
-        key="${key}${seq}"
+    local _seq
+    IFS= read -r -s -n1 REPLY
+    if [[ $REPLY == $'\033' ]]; then
+        IFS= read -r -s -n2 -t 0.1 _seq 2>/dev/null || true
+        REPLY="${REPLY}${_seq}"
     fi
-    printf '%s' "$key"
 }
 
 # ── Config loading ─────────────────────────────────────────────────────────────
@@ -359,12 +358,12 @@ main() {
 
     while true; do
         draw
-        local key; key=$(read_key)
+        read_key
         local n=${#RI[@]}
-        case "$key" in
-            $'\033[A'|k|K)  # up
+        case "$REPLY" in
+            $'\033[A'|$'\033OA'|k|K)  # up
                 (( CURSOR > 0     )) && (( CURSOR-- )) ;;
-            $'\033[B'|j|J)  # down
+            $'\033[B'|$'\033OB'|j|J)  # down
                 (( CURSOR < n - 1 )) && (( CURSOR++ )) ;;
             ' ')            # toggle mark
                 local i="${RI[$CURSOR]}"
