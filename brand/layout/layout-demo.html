@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>gitslim · TUI layout reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="../colors/palette.css" />
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--gs-bg-void);
+    color: var(--gs-ink);
+    font-family: 'JetBrains Mono', 'IBM Plex Mono', Menlo, monospace;
+    min-height: 100vh;
+  }
+
+  /* ── chrome ─────────────────────────────────────────── */
+  .toolbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; gap: 12px; align-items: center;
+    padding: 12px 20px;
+    background: var(--gs-bg-deep);
+    border-bottom: 1px solid var(--gs-bg-grid);
+    font-size: 12px;
+  }
+  .toolbar h1 {
+    margin: 0; font-size: 13px; letter-spacing: 3px;
+    color: var(--gs-ink); font-weight: 700;
+  }
+  .toolbar h1 .scis { color: var(--gs-cyan); }
+  .toolbar .spacer { flex: 1; }
+  .toolbar .seg {
+    display: inline-flex;
+    border: 1px solid var(--gs-violet-dim);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .toolbar .seg button {
+    appearance: none; background: transparent;
+    border: 0; border-right: 1px solid var(--gs-violet-dim);
+    color: var(--gs-ink-dim);
+    font: inherit; font-size: 11px; padding: 5px 12px;
+    cursor: pointer; letter-spacing: 1.5px;
+  }
+  .toolbar .seg button:last-child { border-right: 0; }
+  .toolbar .seg button[aria-pressed="true"] {
+    background: var(--gs-cyan);
+    color: var(--gs-bg-deep);
+  }
+  .toolbar .check {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--gs-ink-dim); cursor: pointer;
+    user-select: none;
+  }
+  .toolbar .check input { accent-color: var(--gs-cyan); }
+
+  /* ── stage ─────────────────────────────────────────── */
+  .stage-wrap {
+    display: grid; place-items: center;
+    padding: 32px 20px 80px;
+    min-height: calc(100vh - 49px);
+  }
+  .stage {
+    width: 1280px; height: 640px;
+    position: relative;
+    background: var(--gs-bg-deep);
+    overflow: hidden;
+    transform-origin: top center;
+  }
+  /* CRT scanlines */
+  .stage::after {
+    content: ""; position: absolute; inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.025) 0,
+      rgba(255,255,255,0.025) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    mix-blend-mode: overlay; z-index: 5;
+  }
+  /* vignette */
+  .stage::before {
+    content: ""; position: absolute; inset: 0;
+    pointer-events: none; z-index: 6;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.55) 100%);
+  }
+  body.no-effects .stage::before,
+  body.no-effects .stage::after { display: none; }
+
+  /* tron grid floor */
+  .grid-floor {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,43,190,0.18) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(54,249,246,0.18) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: linear-gradient(to bottom, transparent 0%, black 50%, black 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50%, black 100%);
+    z-index: 0;
+  }
+  body.no-effects .grid-floor { display: none; }
+
+  /* ── terminal window ─────────────────────────────── */
+  .window {
+    position: absolute;
+    left: 64px; top: 60px; right: 64px; bottom: 60px;
+    background: rgba(7, 0, 15, 0.92);
+    border: 1px solid var(--gs-violet-dim);
+    box-shadow:
+      0 0 0 1px var(--gs-bg-deep),
+      0 0 48px rgba(160,111,255,0.35),
+      inset 0 0 64px rgba(54,249,246,0.04);
+    display: flex; flex-direction: column;
+    z-index: 1;
+  }
+  .titlebar {
+    display: flex; align-items: center;
+    padding: 10px 16px; gap: 10px;
+    border-bottom: 1px solid var(--gs-violet-dim);
+  }
+  .lights { display: flex; gap: 6px; }
+  .lights span {
+    width: 10px; height: 10px; border-radius: 5px;
+  }
+  .lights .l1 { background: var(--gs-magenta); }
+  .lights .l2 { background: var(--gs-amber); }
+  .lights .l3 { background: var(--gs-cyan); }
+  .titlebar .title {
+    flex: 1; text-align: center;
+    color: var(--gs-ink-dim);
+    font-size: 13px; letter-spacing: 2px;
+  }
+
+  .body {
+    flex: 1;
+    padding: 20px 28px;
+    font-size: 15px;
+    line-height: 1.5;
+    display: flex; flex-direction: column;
+  }
+
+  .header-row {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 16px;
+  }
+  .header-left .bar { color: var(--gs-magenta); }
+  .header-left .name {
+    color: var(--gs-cyan); margin-left: 8px; letter-spacing: 2px;
+  }
+  .header-left .meta {
+    color: var(--gs-ink-mute); margin-left: 12px;
+  }
+  .header-right { color: var(--gs-lime); }
+
+  .table-head, .row {
+    display: grid;
+    grid-template-columns: 32px 1fr 110px 130px 80px;
+    gap: 12px;
+    align-items: center;
+  }
+  .table-head {
+    color: var(--gs-ink-mute);
+    font-size: 12px; letter-spacing: 1px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--gs-bg-grid);
+  }
+  .table-head .num { text-align: right; }
+  .rows { display: flex; flex-direction: column; }
+  .row {
+    padding: 7px 0;
+    font-size: 14px;
+    border-left: 3px solid transparent;
+    padding-left: 11px;
+    margin-left: -11px;
+  }
+  .row.cur {
+    background: rgba(54,249,246,0.08);
+    border-left-color: var(--gs-cyan);
+    padding-left: 8px;
+  }
+  .row .mark.on  { color: var(--gs-magenta); }
+  .row .mark.off { color: var(--gs-ink-mute); }
+  .row .path { color: var(--gs-ink); }
+  .row.cur .path { color: var(--gs-cyan); }
+  .row .size { text-align: right; color: var(--gs-ink-dim); }
+  .row.marked .size { color: var(--gs-magenta); }
+  .row .age { text-align: right; color: var(--gs-ink-mute); }
+  .row .tag { color: var(--gs-lime); font-size: 10px; letter-spacing: 1px; }
+
+  .footer {
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid var(--gs-bg-grid);
+    display: flex; gap: 20px;
+    font-size: 12px; color: var(--gs-ink-mute);
+  }
+  .key { color: var(--gs-cyan); margin-right: 4px; }
+  .key.danger { color: var(--gs-magenta); }
+  .key.dim    { color: var(--gs-ink-dim); }
+
+  /* ── confirm modal ─────────────────────────────── */
+  .modal {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    width: 540px;
+    background: var(--gs-bg-deep);
+    border: 1px solid var(--gs-magenta);
+    box-shadow: 0 0 48px rgba(255, 43, 190, 0.35);
+    padding: 24px 28px;
+    z-index: 2;
+  }
+  .modal h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    letter-spacing: 3px;
+    color: var(--gs-magenta);
+  }
+  .modal p { margin: 0 0 16px; color: var(--gs-ink); font-size: 14px; line-height: 1.55; }
+  .modal .summary {
+    background: var(--gs-bg-void);
+    border: 1px solid var(--gs-bg-grid);
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .modal .summary div { display: flex; justify-content: space-between; padding: 2px 0; }
+  .modal .summary .lbl { color: var(--gs-ink-dim); }
+  .modal .summary .val { color: var(--gs-ink); }
+  .modal .summary .val.warn { color: var(--gs-amber); }
+  .modal .summary .val.good { color: var(--gs-lime); }
+  .modal .keys { display: flex; gap: 16px; font-size: 12px; color: var(--gs-ink-mute); }
+
+  /* ── result overlay ─────────────────────────────── */
+  .result-line {
+    margin-top: 10px;
+    color: var(--gs-lime);
+    font-size: 14px;
+  }
+
+  /* ── annotations ─────────────────────────────── */
+  .anno {
+    position: absolute;
+    z-index: 30;
+    pointer-events: none;
+    display: none;
+  }
+  body.annotate .anno { display: block; }
+  .anno-line {
+    position: absolute;
+    background: var(--gs-amber);
+    opacity: 0.85;
+  }
+  .anno-label {
+    position: absolute;
+    font-size: 10px;
+    color: var(--gs-amber);
+    background: rgba(7, 0, 15, 0.9);
+    border: 1px solid var(--gs-amber);
+    padding: 2px 6px;
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+
+  /* ── responsive scaling ─────────────────────────── */
+  @media (max-width: 1340px) {
+    .stage-wrap { padding-top: 20px; }
+  }
+
+  /* ── docs strip ─────────────────────────────── */
+  .docs {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 20px 80px;
+    color: var(--gs-ink-dim);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .docs h2 {
+    color: var(--gs-ink);
+    font-size: 14px;
+    letter-spacing: 3px;
+    margin: 32px 0 12px;
+    border-bottom: 1px solid var(--gs-bg-grid);
+    padding-bottom: 6px;
+  }
+  .docs h2 .accent { color: var(--gs-magenta); }
+  .docs .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 12px;
+  }
+  .docs .card {
+    background: var(--gs-bg-deep);
+    border: 1px solid var(--gs-bg-grid);
+    padding: 14px 16px;
+  }
+  .docs .card .name { color: var(--gs-cyan); font-weight: 700; font-size: 12px; letter-spacing: 2px; margin-bottom: 6px; }
+  .docs code {
+    background: var(--gs-bg-void);
+    padding: 1px 6px;
+    color: var(--gs-ink);
+    border-radius: 2px;
+    font-size: 12px;
+  }
+  .docs ul { padding-left: 20px; margin: 8px 0; }
+  .docs li { margin: 4px 0; }
+
+  .swatch-row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .swatch { width: 20px; height: 20px; border: 1px solid rgba(255,255,255,0.1); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1><span class="scis">✂</span> gitslim · TUI layout reference</h1>
+  <div class="spacer"></div>
+  <div class="seg" role="tablist" aria-label="State">
+    <button data-state="browse" aria-pressed="true">BROWSE</button>
+    <button data-state="confirm" aria-pressed="false">CONFIRM</button>
+    <button data-state="result" aria-pressed="false">RESULT</button>
+  </div>
+  <label class="check"><input type="checkbox" id="anno-toggle" /> annotate</label>
+  <label class="check"><input type="checkbox" id="fx-toggle" checked /> CRT FX</label>
+</div>
+
+<div class="stage-wrap">
+  <div class="stage" id="stage">
+    <div class="grid-floor"></div>
+
+    <div class="window">
+      <div class="titlebar">
+        <div class="lights">
+          <span class="l1"></span><span class="l2"></span><span class="l3"></span>
+        </div>
+        <div class="title">── gitslim · ~/code ──</div>
+      </div>
+
+      <div class="body">
+        <div class="header-row">
+          <div class="header-left">
+            <span class="bar">▍</span>
+            <span class="name">gitslim</span>
+            <span class="meta" id="meta-text">v0.1.0 · scanning ~/code</span>
+          </div>
+          <div class="header-right" id="header-right">▲ 4.2G freed · 27 / 142 selected</div>
+        </div>
+
+        <div class="table-head">
+          <div></div>
+          <div>REPOSITORY</div>
+          <div class="num">.GIT SIZE</div>
+          <div class="num">LAST COMMIT</div>
+          <div></div>
+        </div>
+
+        <div class="rows" id="rows"></div>
+
+        <div class="footer">
+          <span><span class="key">↑↓</span>nav</span>
+          <span><span class="key">SPC</span>mark</span>
+          <span><span class="key danger">S</span>slim</span>
+          <span><span class="key">?</span>help</span>
+          <span><span class="key dim">Q</span>quit</span>
+        </div>
+
+        <div class="result-line" id="result-line" style="display:none;">
+          ✓ slimmed 3 repos · 3.74 GB freed · operation took 1.4s
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm modal (toggled by state) -->
+    <div class="modal" id="modal" style="display:none;">
+      <h3>CONFIRM · SLIM 3 REPOS?</h3>
+      <p>This will convert the following repos to shallow clones in place. History is replaced; uncommitted changes are preserved.</p>
+      <div class="summary">
+        <div><span class="lbl">~/code/forks/linux</span>          <span class="val warn">2.1G → ~24M</span></div>
+        <div><span class="lbl">~/code/old-dotfiles</span>         <span class="val warn">1.2G → ~18M</span></div>
+        <div><span class="lbl">~/code/archive/old-rails-app</span><span class="val warn">412M → ~12M</span></div>
+        <div style="margin-top:8px;border-top:1px solid var(--gs-bg-grid);padding-top:8px"><span class="lbl">total reclaim</span><span class="val good">≈ 3.74 GB</span></div>
+      </div>
+      <div class="keys">
+        <span><span class="key danger">Y</span>confirm</span>
+        <span><span class="key">N</span>cancel</span>
+        <span><span class="key dim">ESC</span>back</span>
+      </div>
+    </div>
+
+    <!-- Annotations layer -->
+    <div class="anno">
+      <div class="anno-label" style="left:8px;top:8px">64 px · outer pad</div>
+      <div class="anno-line" style="left:0;top:60px;width:64px;height:1px"></div>
+      <div class="anno-label" style="left:80px;top:46px">window · violet-dim border</div>
+      <div class="anno-label" style="left:80px;top:104px">title bar · 42 px</div>
+      <div class="anno-label" style="left:280px;top:160px">selected row · cyan @ 8%, 3px cyan bar</div>
+      <div class="anno-label" style="left:80px;top:530px">footer · ink-mute · keys colored by intent</div>
+      <div class="anno-label" style="left:980px;top:104px">freed-total · lime accent</div>
+    </div>
+  </div>
+</div>
+
+<div class="docs">
+  <h2><span class="accent">▍</span> implementation notes</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="name">VIEWPORT</div>
+      Build for a min terminal width of <code>80 cols</code>. Above that, columns flex. The reference renders at <code>1280×640</code> (≈ 110 cols, 36 rows at 12pt).
+    </div>
+    <div class="card">
+      <div class="name">ROW STATES</div>
+      <ul>
+        <li><code>[ ]</code> idle — <code>ink-mute</code></li>
+        <li><code>[x]</code> marked — <code>magenta</code> + magenta size</li>
+        <li>focused — cyan bar at left, 8% cyan bg, path tint cyan</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="name">SIZE COLOR</div>
+      Below 100 M → <code>ink-dim</code>. 100 M – 1 G → <code>ink</code>. ≥ 1 G → <code>amber</code>. When the row is marked, the size flips to <code>magenta</code> regardless of size.
+    </div>
+    <div class="card">
+      <div class="name">KEY HINTS</div>
+      Glyph is colored by intent: <span style="color:var(--gs-cyan)">cyan</span> for navigation, <span style="color:var(--gs-magenta)">magenta</span> for destructive (S, Y), <span style="color:var(--gs-ink-dim)">ink-dim</span> for neutral (Q, ESC). Label is always <code>ink-mute</code>.
+    </div>
+    <div class="card">
+      <div class="name">CRT FX</div>
+      Optional and subtle. Scanlines at 3 px repeat with 2.5 % opacity overlay-blended. Vignette is a radial mask transparent→55 % black past 50 % radius. Disable on low-end terminals.
+    </div>
+    <div class="card">
+      <div class="name">FONT</div>
+      Use the user's terminal font (don't impose). The reference uses <code>JetBrains Mono</code>. For figlet splashes, prefer the included ASCII <code>medium-01</code> sigil (fits in 80 cols).
+    </div>
+  </div>
+
+  <h2><span class="accent">▍</span> color tokens</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="name">accents</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#ff2bbe" title="magenta"></div>
+        <div class="swatch" style="background:#ff5cd1" title="magenta-hot"></div>
+        <div class="swatch" style="background:#36f9f6" title="cyan"></div>
+        <div class="swatch" style="background:#7afffd" title="cyan-hot"></div>
+        <div class="swatch" style="background:#a06fff" title="violet"></div>
+      </div>
+      <div style="margin-top:8px">See <code>colors/palette.json</code> for full tokens and ANSI mappings.</div>
+    </div>
+    <div class="card">
+      <div class="name">status</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#ffcf3a" title="amber"></div>
+        <div class="swatch" style="background:#b8ff5c" title="lime"></div>
+      </div>
+      <div style="margin-top:8px">amber for warnings · lime for freed bytes</div>
+    </div>
+    <div class="card">
+      <div class="name">surface</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#0d0220" title="bg-deep"></div>
+        <div class="swatch" style="background:#07000f" title="bg-void"></div>
+        <div class="swatch" style="background:#14062e" title="bg-panel"></div>
+        <div class="swatch" style="background:#1a0a3a" title="bg-grid"></div>
+      </div>
+      <div style="margin-top:8px">deep · void · panel · grid</div>
+    </div>
+  </div>
+
+  <h2><span class="accent">▍</span> keyboard map</h2>
+  <div class="grid">
+    <div class="card"><div class="name">browse</div><code>↑↓</code> nav · <code>SPC</code> toggle mark · <code>S</code> slim selected · <code>/</code> filter · <code>?</code> help · <code>Q</code> quit</div>
+    <div class="card"><div class="name">confirm</div><code>Y</code> proceed · <code>N</code> / <code>ESC</code> cancel</div>
+    <div class="card"><div class="name">result</div><code>↵</code> return to browse · <code>Q</code> quit</div>
+  </div>
+</div>
+
+<script>
+  // Sample data (same as banner)
+  const REPOS = [
+    { path: '~/code/old-dotfiles',        size: '1.2G', age: '3y ago',   marked: true,  cur: false },
+    { path: '~/code/personal/blog-engine', size: '684M', age: '11mo ago', marked: false, cur: true  },
+    { path: '~/code/forks/linux',          size: '2.1G', age: '2y ago',   marked: true,  cur: false },
+    { path: '~/code/work/api-server',      size: ' 92M', age: '2d ago',   marked: false, cur: false },
+    { path: '~/code/archive/old-rails-app', size: '412M', age: '4y ago',   marked: true,  cur: false },
+    { path: '~/code/work/dashboard-ui',    size: '138M', age: '1w ago',   marked: false, cur: false },
+  ];
+
+  function renderRows() {
+    const html = REPOS.map(r => `
+      <div class="row ${r.cur ? 'cur' : ''} ${r.marked ? 'marked' : ''}">
+        <div class="mark ${r.marked ? 'on' : 'off'}">${r.marked ? '[x]' : '[ ]'}</div>
+        <div class="path">${r.path}</div>
+        <div class="size">${r.size}</div>
+        <div class="age">${r.age}</div>
+        <div class="tag">${r.marked ? 'SLIM' : ''}</div>
+      </div>
+    `).join('');
+    document.getElementById('rows').innerHTML = html;
+  }
+  renderRows();
+
+  // State switching
+  const segButtons = document.querySelectorAll('.seg button');
+  const modal = document.getElementById('modal');
+  const resultLine = document.getElementById('result-line');
+  const meta = document.getElementById('meta-text');
+  const headerRight = document.getElementById('header-right');
+
+  function setState(state) {
+    segButtons.forEach(b => b.setAttribute('aria-pressed', b.dataset.state === state ? 'true' : 'false'));
+    modal.style.display = state === 'confirm' ? 'block' : 'none';
+    resultLine.style.display = state === 'result' ? 'block' : 'none';
+    if (state === 'browse') {
+      meta.textContent = 'v0.1.0 · scanning ~/code';
+      headerRight.textContent = '▲ 4.2G freed · 27 / 142 selected';
+      headerRight.style.color = 'var(--gs-lime)';
+    } else if (state === 'confirm') {
+      meta.textContent = 'v0.1.0 · awaiting confirmation';
+      headerRight.textContent = '⚠ 3 repos marked · 3.74G';
+      headerRight.style.color = 'var(--gs-amber)';
+    } else if (state === 'result') {
+      meta.textContent = 'v0.1.0 · done';
+      headerRight.textContent = '✓ 3 slimmed · 3.74G freed';
+      headerRight.style.color = 'var(--gs-lime)';
+    }
+  }
+  segButtons.forEach(b => b.addEventListener('click', () => setState(b.dataset.state)));
+
+  // Toggles
+  document.getElementById('anno-toggle').addEventListener('change', e => {
+    document.body.classList.toggle('annotate', e.target.checked);
+  });
+  document.getElementById('fx-toggle').addEventListener('change', e => {
+    document.body.classList.toggle('no-effects', !e.target.checked);
+  });
+
+  // Keyboard
+  window.addEventListener('keydown', e => {
+    if (e.key === '1') setState('browse');
+    else if (e.key === '2') setState('confirm');
+    else if (e.key === '3') setState('result');
+    else if (e.key === 'a' || e.key === 'A') {
+      const el = document.getElementById('anno-toggle');
+      el.checked = !el.checked; el.dispatchEvent(new Event('change'));
+    }
+  });
+
+  // Auto-scale stage to fit viewport width
+  function fit() {
+    const stage = document.getElementById('stage');
+    const wrap = stage.parentElement;
+    const avail = wrap.clientWidth - 40;
+    const scale = Math.min(1, avail / 1280);
+    stage.style.transform = `scale(${scale})`;
+    // re-flow wrap height to scaled stage
+    stage.style.marginBottom = `${(scale - 1) * 640}px`;
+  }
+  window.addEventListener('resize', fit); fit();
+</script>
+</body>
+</html>

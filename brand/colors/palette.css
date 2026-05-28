@@ -1,0 +1,36 @@
+/* ───────────────────────────────────────────────
+   gitslim · brand palette
+   Drop-in CSS custom properties. All colors are
+   tuned for dark backgrounds and 256-color terms.
+   ─────────────────────────────────────────────── */
+
+:root {
+  /* Backgrounds */
+  --gs-bg-void:      #07000f;  /* deepest — page void */
+  --gs-bg-deep:      #0d0220;  /* main app background */
+  --gs-bg-panel:     #14062e;  /* raised panel / card */
+  --gs-bg-grid:      #1a0a3a;  /* subtle grid line / divider */
+
+  /* Magenta — primary accent (marks, prompts, destructive) */
+  --gs-magenta:      #ff2bbe;
+  --gs-magenta-hot:  #ff5cd1;
+  --gs-magenta-dim:  #a8137e;
+
+  /* Cyan — secondary accent (cursor, success, links) */
+  --gs-cyan:         #36f9f6;
+  --gs-cyan-hot:     #7afffd;
+  --gs-cyan-dim:     #0fb8b5;
+
+  /* Violet — bridge / chrome / borders */
+  --gs-violet:       #a06fff;
+  --gs-violet-dim:   #6a3fcc;
+
+  /* Status */
+  --gs-amber:        #ffcf3a;  /* warning · large repo */
+  --gs-lime:         #b8ff5c;  /* success · bytes freed */
+
+  /* Text */
+  --gs-ink:          #f0e6ff;  /* primary */
+  --gs-ink-dim:      #9f8fc8;  /* secondary */
+  --gs-ink-mute:     #5a4d80;  /* tertiary · key hints */
+}

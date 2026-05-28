@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schemas.gitslim.dev/palette.json",
+  "name": "gitslim",
+  "description": "Retro-cyberpunk palette for the gitslim TUI. Magenta + cyan duotone on deep violet-black.",
+  "tokens": {
+    "bg": {
+      "void":  { "hex": "#07000f", "rgb": [7, 0, 15],    "role": "deepest page void" },
+      "deep":  { "hex": "#0d0220", "rgb": [13, 2, 32],   "role": "main app background" },
+      "panel": { "hex": "#14062e", "rgb": [20, 6, 46],   "role": "raised panel / card" },
+      "grid":  { "hex": "#1a0a3a", "rgb": [26, 10, 58],  "role": "subtle grid line / divider" }
+    },
+    "magenta": {
+      "base": { "hex": "#ff2bbe", "rgb": [255, 43, 190], "ansi256": 199, "role": "primary accent · marks, prompts, destructive" },
+      "hot":  { "hex": "#ff5cd1", "rgb": [255, 92, 209], "ansi256": 213, "role": "hover / focus highlight" },
+      "dim":  { "hex": "#a8137e", "rgb": [168, 19, 126], "ansi256": 162, "role": "low-emphasis magenta" }
+    },
+    "cyan": {
+      "base": { "hex": "#36f9f6", "rgb": [54, 249, 246], "ansi256": 51,  "role": "secondary accent · cursor, success, links" },
+      "hot":  { "hex": "#7afffd", "rgb": [122, 255, 253],"ansi256": 87,  "role": "selected row" },
+      "dim":  { "hex": "#0fb8b5", "rgb": [15, 184, 181], "ansi256": 37,  "role": "low-emphasis cyan" }
+    },
+    "violet": {
+      "base": { "hex": "#a06fff", "rgb": [160, 111, 255],"ansi256": 141, "role": "bridge / borders" },
+      "dim":  { "hex": "#6a3fcc", "rgb": [106, 63, 204], "ansi256": 99,  "role": "dim border" }
+    },
+    "status": {
+      "amber": { "hex": "#ffcf3a", "rgb": [255, 207, 58], "ansi256": 221, "role": "warning · large repo size" },
+      "lime":  { "hex": "#b8ff5c", "rgb": [184, 255, 92], "ansi256": 155, "role": "success · bytes freed" }
+    },
+    "ink": {
+      "base": { "hex": "#f0e6ff", "rgb": [240, 230, 255],"ansi256": 255, "role": "primary text" },
+      "dim":  { "hex": "#9f8fc8", "rgb": [159, 143, 200],"ansi256": 103, "role": "secondary text" },
+      "mute": { "hex": "#5a4d80", "rgb": [90, 77, 128],  "ansi256": 60,  "role": "tertiary · key hints, separators" }
+    }
+  },
+  "usage": {
+    "mark_pending":   "magenta.base",
+    "mark_selected":  "magenta.hot",
+    "row_focused_bg": "cyan.base @ 8% alpha",
+    "row_focused_bar":"cyan.base",
+    "prompt_sigil":   "cyan.base",
+    "size_warn":      "amber",
+    "size_normal":    "ink.dim",
+    "bytes_freed":    "lime",
+    "key_hint_label": "ink.mute",
+    "key_hint_glyph": "cyan.base (nav) / magenta.base (destructive)"
+  }
+}

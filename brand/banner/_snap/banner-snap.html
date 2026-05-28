@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>gitslim banner · native re-render</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="../../colors/palette.css" />
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--gs-bg-void);
+    color: var(--gs-ink);
+    font-family: 'JetBrains Mono', Menlo, monospace;
+  }
+  /* Stage at native 1280x640 — right-click and save the <img> after render */
+  #stage { width: 1280px; height: 640px; position: relative; overflow: hidden; background: var(--gs-bg-deep); }
+  #stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+    background: repeating-linear-gradient(to bottom, rgba(255,255,255,0.025) 0, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 3px);
+    mix-blend-mode: overlay; }
+  #stage::before { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 6;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.55) 100%); }
+  .grid-floor { position: absolute; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,43,190,0.18) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(54,249,246,0.18) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: linear-gradient(to bottom, transparent 0%, black 50%, black 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50%, black 100%);
+    opacity: 0.5;
+  }
+  .window {
+    position: absolute; left: 64px; top: 60px; right: 64px; bottom: 60px;
+    background: rgba(7, 0, 15, 0.92);
+    border: 1px solid var(--gs-violet-dim);
+    box-shadow: 0 0 0 1px var(--gs-bg-deep), 0 0 48px rgba(160,111,255,0.35), inset 0 0 64px rgba(54,249,246,0.04);
+    display: flex; flex-direction: column;
+    z-index: 1;
+  }
+  .titlebar { display: flex; align-items: center; padding: 10px 16px; gap: 10px; border-bottom: 1px solid var(--gs-violet-dim); }
+  .lights { display: flex; gap: 6px; }
+  .lights span { width: 10px; height: 10px; border-radius: 5px; }
+  .lights .l1 { background: var(--gs-magenta); }
+  .lights .l2 { background: var(--gs-amber); }
+  .lights .l3 { background: var(--gs-cyan); }
+  .title { flex: 1; text-align: center; color: var(--gs-ink-dim); font-size: 13px; letter-spacing: 2px; }
+  .body { flex: 1; padding: 20px 28px; font-size: 15px; line-height: 1.5; }
+  .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .bar { color: var(--gs-magenta); }
+  .name { color: var(--gs-cyan); margin-left: 8px; letter-spacing: 2px; }
+  .meta { color: var(--gs-ink-mute); margin-left: 12px; }
+  .freed { color: var(--gs-lime); }
+  .table-head, .row {
+    display: grid;
+    grid-template-columns: 32px 1fr 110px 130px 80px;
+    gap: 12px; align-items: center;
+  }
+  .table-head { color: var(--gs-ink-mute); font-size: 12px; letter-spacing: 1px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--gs-bg-grid); }
+  .table-head .num { text-align: right; }
+  .row { padding: 7px 0; font-size: 14px; border-left: 3px solid transparent; padding-left: 11px; margin-left: -11px; }
+  .row.cur { background: rgba(54,249,246,0.08); border-left-color: var(--gs-cyan); padding-left: 8px; }
+  .row .mark.on  { color: var(--gs-magenta); }
+  .row .mark.off { color: var(--gs-ink-mute); }
+  .row .path { color: var(--gs-ink); }
+  .row.cur .path { color: var(--gs-cyan); }
+  .row .size { text-align: right; color: var(--gs-ink-dim); }
+  .row.marked .size { color: var(--gs-magenta); }
+  .row .age { text-align: right; color: var(--gs-ink-mute); }
+  .row .tag { color: var(--gs-lime); font-size: 10px; letter-spacing: 1px; }
+  .footer { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--gs-bg-grid);
+    display: flex; gap: 20px; font-size: 12px; color: var(--gs-ink-mute); }
+  .k { margin-right: 4px; color: var(--gs-cyan); }
+  .k.d { color: var(--gs-magenta); }
+  .k.q { color: var(--gs-ink-dim); }
+
+  /* download UI */
+  .panel { padding: 24px 28px; max-width: 1280px; }
+  .panel h1 { font-family: 'Press Start 2P', monospace; font-size: 14px;
+    color: var(--gs-ink); margin: 0 0 8px;
+    text-shadow: -1.5px 0 0 var(--gs-magenta), 1.5px 0 0 var(--gs-cyan); }
+  .panel p { color: var(--gs-ink-dim); font-size: 13px; line-height: 1.6; margin: 0 0 12px; }
+  .panel button {
+    appearance: none; background: var(--gs-cyan); color: var(--gs-bg-deep);
+    border: 0; padding: 10px 16px; font: inherit; font-weight: 700;
+    letter-spacing: 2px; cursor: pointer;
+  }
+  .panel button:disabled { opacity: 0.5; cursor: wait; }
+  #out img { display: block; margin-top: 16px; max-width: 100%; border: 1px solid var(--gs-violet-dim); }
+  #out a { color: var(--gs-cyan); font-size: 12px; display: inline-block; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <h1>gitslim banner · 1280 × 640</h1>
+  <p>Native-resolution re-render of the canonical banner. Click <b>Render</b>, then
+  right-click the result and Save Image As. Edit the data array in this file's
+  <code>&lt;script&gt;</code> tag if you want different repos in the demo.</p>
+  <button id="render">Render PNG</button>
+</div>
+
+<div id="stage">
+  <div class="grid-floor"></div>
+  <div class="window">
+    <div class="titlebar">
+      <div class="lights"><span class="l1"></span><span class="l2"></span><span class="l3"></span></div>
+      <div class="title">── gitslim · ~/code ──</div>
+    </div>
+    <div class="body">
+      <div class="header-row">
+        <div>
+          <span class="bar">▍</span><span class="name">gitslim</span><span class="meta">v0.1.0 · scanning ~/code</span>
+        </div>
+        <div class="freed">▲ 4.2G freed · 27 / 142 selected</div>
+      </div>
+      <div class="table-head">
+        <div></div><div>REPOSITORY</div><div class="num">.GIT SIZE</div><div class="num">LAST COMMIT</div><div></div>
+      </div>
+      <div id="rows"></div>
+      <div class="footer">
+        <span><span class="k">↑↓</span>nav</span>
+        <span><span class="k">SPC</span>mark</span>
+        <span><span class="k d">S</span>slim</span>
+        <span><span class="k">?</span>help</span>
+        <span><span class="k q">Q</span>quit</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel" id="out"></div>
+
+<script src="https://unpkg.com/html-to-image@1.11.11/dist/html-to-image.js"></script>
+<script>
+  const REPOS = [
+    { path: '~/code/old-dotfiles',         size: '1.2G', age: '3y ago',   marked: true,  cur: false },
+    { path: '~/code/personal/blog-engine', size: '684M', age: '11mo ago', marked: false, cur: true  },
+    { path: '~/code/forks/linux',          size: '2.1G', age: '2y ago',   marked: true,  cur: false },
+    { path: '~/code/work/api-server',      size: ' 92M', age: '2d ago',   marked: false, cur: false },
+    { path: '~/code/archive/old-rails-app', size: '412M', age: '4y ago',   marked: true,  cur: false },
+    { path: '~/code/work/dashboard-ui',    size: '138M', age: '1w ago',   marked: false, cur: false },
+  ];
+  document.getElementById('rows').innerHTML = REPOS.map(r => `
+    <div class="row ${r.cur ? 'cur' : ''} ${r.marked ? 'marked' : ''}">
+      <div class="mark ${r.marked ? 'on' : 'off'}">${r.marked ? '[x]' : '[ ]'}</div>
+      <div class="path">${r.path}</div>
+      <div class="size">${r.size}</div>
+      <div class="age">${r.age}</div>
+      <div class="tag">${r.marked ? 'SLIM' : ''}</div>
+    </div>
+  `).join('');
+
+  document.getElementById('render').addEventListener('click', async (e) => {
+    e.target.disabled = true; e.target.textContent = 'rendering…';
+    if (document.fonts) { try { await document.fonts.ready; } catch (_) {} }
+    await new Promise(r => setTimeout(r, 500));
+    const stage = document.getElementById('stage');
+    const dataUrl = await htmlToImage.toPng(stage, {
+      width: 1280, height: 640, pixelRatio: 1,
+      backgroundColor: '#07000f',
+    });
+    const out = document.getElementById('out');
+    out.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.alt = 'gitslim banner @ 1280×640';
+    out.appendChild(img);
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = 'gitslim-banner-1280x640.png';
+    a.textContent = '↓ Download PNG';
+    out.appendChild(a);
+    e.target.disabled = false; e.target.textContent = 'Render PNG';
+  });
+</script>
+</body>
+</html>
