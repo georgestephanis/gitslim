@@ -685,7 +685,8 @@ drop_unfound() {
     CURSOR=0; SCROLL=0
 }
 
-_under_root() { [[ "$1" == "$SEARCH_ROOT" || "$1" == "${SEARCH_ROOT%/}"/* ]]; }
+# The root is quoted so any glob characters in it ([, ?, *) match literally
+_under_root() { [[ "$1" == "$SEARCH_ROOT" || "$1" == "${SEARCH_ROOT%/}/"* ]]; }
 
 # Seed the list from cached repos under SEARCH_ROOT whose .git still exists,
 # so a repeat run shows its list at once while `find` looks for new repos.
