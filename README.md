@@ -67,6 +67,8 @@ gitslim            # scan $HOME
 gitslim ~/code     # scan a specific directory
 ```
 
+Set `GITSLIM_DEBUG_LOG=/path/to/log` to write a debug log (cleared on each run).
+
 ### Keyboard controls
 
 | Key | Action |
@@ -99,7 +101,7 @@ A 4-character label appears at the right of each row when the repo has a notable
 
 ## Configuration
 
-Create `~/.config/gitslim/config` (or `~/.gitslim`) to customise the slim depth:
+Create `~/.config/gitslim/config` (or `~/.gitslim`) to customise the slim depth and which directories are searched:
 
 ```ini
 # Keep the last 5 commits locally instead of just 1
@@ -107,9 +109,15 @@ depth = 5
 
 # — or — keep everything from the last 3 months:
 # since = 3m
+
+# Skip directories during the search (repeatable)
+exclude = vendor            # a bare name matches anywhere
+exclude = ~/work/archive    # a path matches only that path
 ```
 
 `since` accepts shorthand (`Nd`, `Nw`, `Nm`, `Ny` for days/weeks/months/years) or any git-understood date string (`2024-01-01`, `6 months ago`). When `since` is set it takes precedence over `depth`.
+
+The search already skips `node_modules` and places where repos are caches or tool-managed state: `~/Library`, `~/.Trash`, `~/.cache`, `~/.npm`, `~/.cargo`, `~/.rustup`, `~/.pyenv`, `~/.nvm` and `~/go/pkg`. `exclude` adds to that list. To scan an excluded directory anyway, pass it as the search root (`gitslim ~/Library`).
 
 ## Caveats
 

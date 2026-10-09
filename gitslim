@@ -13,16 +13,30 @@ if (( BASH_VERSINFO[0] < 3 )); then
     exit 1
 fi
 
+# Keys are read from stdin; without a terminal there read_key can't block.
+# Checked before the EXIT trap so a refusal doesn't emit terminal sequences.
+if [[ ! -t 0 ]]; then
+    printf 'gitslim: stdin must be a terminal\n' >&2
+    exit 1
+fi
+
 SEARCH_ROOT="${1:-$HOME}"
+# No trailing slash: find would print "root//sub", which defeats -path excludes
+while [[ "$SEARCH_ROOT" == ?*/ ]]; do SEARCH_ROOT="${SEARCH_ROOT%/}"; done
 
 # ── Debug log ──────────────────────────────────────────────────────────────────
-# Set to a path (e.g. /tmp/gitslim-debug.log) to enable; empty to disable.
-DEBUG_LOG=""
+# Set GITSLIM_DEBUG_LOG to a path (e.g. /tmp/gitslim-debug.log) to enable.
+DEBUG_LOG="${GITSLIM_DEBUG_LOG:-}"
 _log() {
     [[ -z "$DEBUG_LOG" ]] && return
-    printf '%s %s\n' "$(date '+%T')" "$*" >> "$DEBUG_LOG"
+    { printf '%s %s\n' "$(date '+%T')" "$*" >> "$DEBUG_LOG"; } 2>/dev/null
 }
-[[ -n "$DEBUG_LOG" ]] && : > "$DEBUG_LOG"
+# An unwritable path would spray shell errors over the TUI; warn once, before
+# the TUI starts, and run without logging.
+if [[ -n "$DEBUG_LOG" ]] && ! { : > "$DEBUG_LOG"; } 2>/dev/null; then
+    printf 'gitslim: cannot write debug log %s; logging disabled\n' "$DEBUG_LOG" >&2
+    DEBUG_LOG=""
+fi
 
 # ── Brand palette (ANSI 256-colour) ───────────────────────────────────────────
 ESC=$'\033'
@@ -40,6 +54,10 @@ INK_MUTE="${ESC}[38;5;60m"    # #5a4d80  key hints
 
 _rows() { local s; s=$(stty size </dev/tty 2>/dev/null) && printf '%s' "${s% *}" || tput lines 2>/dev/null || printf '24'; }
 _cols() { local s; s=$(stty size </dev/tty 2>/dev/null) && printf '%s' "${s#* }" || tput cols  2>/dev/null || printf '80'; }
+# Non-blocking single-key read; sets REPLY ("" if no key is waiting). bash 3.2's
+# `read -t 0` never consumes input, so this relies on the tty being in
+# `min 0 time 0` mode (set for the duration of the scan) and reads via dd.
+poll_key() { REPLY=$(dd bs=1 count=1 </dev/tty 2>/dev/null); }
 _sep()  { printf '%s' "$VIOLET"; printf '─%.0s' $(seq 1 "${1:-$(_cols)}"); printf '%s\n' "$RESET"; }
 
 # ── Data arrays ────────────────────────────────────────────────────────────────
@@ -55,8 +73,11 @@ declare -a RI=()   # sorted indices into above arrays
 
 CURSOR=0; SCROLL=0; SORT_BY=age
 SCANNING=0       # 1 while scan is running; draw() adapts header/footer
+SEARCHING=0      # 1 while `find` runs behind a list seeded from the cache
 SAVED_STTY=""    # terminal state saved before TUI entry; restored on cleanup
 TOTAL_FREED=0    # cumulative KB freed across slim operations this session
+DISCOVER_TMP=""  # discover_repos' find output; removed on cleanup
+RESIZED=0        # set by the WINCH trap; drawing loops redraw when they see it
 
 # Cache: ~/.cache/gitslim/cache (XDG); fallback ~/.gitslim-cache
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gitslim"
@@ -68,20 +89,48 @@ declare -a CACHE_KEYS=() CACHE_VALS=()   # parallel arrays: key=repo path, val=t
 DEPTH=1    # commits to keep (--depth N)
 SINCE=""   # keep history since date/period (overrides DEPTH when set)
 
+# Directories discovery never descends into. A pattern containing "/" is matched
+# against the full path (find -path); otherwise against the directory name
+# (find -name). Repos in these places are dependencies, caches or tool-managed
+# state, and walking ~/Library alone accounts for most of a $HOME scan.
+# Extended with `exclude = …` lines in the config file.
+EXCLUDES=(
+    node_modules
+    "$HOME/Library"
+    "$HOME/.Trash"
+    "$HOME/.cache"
+    "$HOME/.npm"
+    "$HOME/.cargo"
+    "$HOME/.rustup"
+    "$HOME/.pyenv"
+    "$HOME/.nvm"
+    "$HOME/go/pkg"
+)
+
 # ── Cleanup ────────────────────────────────────────────────────────────────────
+# stty acts on fd 0 by default. A signal can arrive while fd 0 is the `find` pipe
+# (inside discover_repos), so every stty call targets /dev/tty explicitly —
+# otherwise the restore silently fails and the shell is left without echo.
 _cleanup() {
+    pkill -P $$ -x find 2>/dev/null || true   # discovery may still be running
+    [[ -n "$DISCOVER_TMP" ]] && rm -f "$DISCOVER_TMP"
     tput smam  2>/dev/null || true
     tput rmcup 2>/dev/null || true
     tput cnorm 2>/dev/null || true
     if [[ -n "$SAVED_STTY" ]]; then
-        stty "$SAVED_STTY" 2>/dev/null || true
+        stty "$SAVED_STTY" </dev/tty 2>/dev/null || true
     else
-        stty echo 2>/dev/null || true
+        stty sane </dev/tty 2>/dev/null || true
     fi
 }
 trap _cleanup EXIT
 trap '_log "received SIGINT";  exit 130' INT
 trap '_log "received SIGTERM"; exit 143' TERM
+
+# Terminal resized: only set a flag. Drawing from inside the trap isn't
+# reliable — on bash 3.2, command substitutions run from a trap that fires
+# during a blocking `read` return empty, so _cols/_rows would read as blank.
+trap 'RESIZED=1' WINCH
 
 # ── Formatting ─────────────────────────────────────────────────────────────────
 fmt_size() {
@@ -105,7 +154,8 @@ fmt_size() {
 
 fmt_age() {
     local d=$1
-    if   (( d == 0  )); then printf 'today'
+    if   (( d == 9999 )); then printf -- '-'   # sentinel: no commits / no files / not scanned yet
+    elif (( d == 0  )); then printf 'today'
     elif (( d == 1  )); then printf '1 day ago'
     elif (( d <  7  )); then printf '%d days ago'   "$d"
     elif (( d <  14 )); then printf '1 week ago'
@@ -194,7 +244,9 @@ draw() {
     local freed_str=""
     (( TOTAL_FREED > 0 )) && freed_str="  ${LIME}▲ $(fmt_size $TOTAL_FREED) freed${RESET}"
     if (( SCANNING )); then
-        printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · scanning…${RESET}%s" "$n" "$freed_str"
+        local phase="scanning…"
+        (( SEARCHING )) && phase="searching for new repos…"
+        printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · %s${RESET}%s" "$n" "$phase" "$freed_str"
     else
         printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · sort:${RESET}${INK}%s${RESET}%s%s" "$n" "$SORT_BY" "$marked_str" "$freed_str"
     fi
@@ -294,7 +346,14 @@ draw() {
 # ── Key input ──────────────────────────────────────────────────────────────────
 read_key() {
     local _c
-    IFS= read -r -s -n1 REPLY
+    # Wake every second so a resize redraws without waiting for a key. A
+    # timeout loses nothing: -n1 completes on the first byte that arrives.
+    # bash 3.2 returns the same status for a timeout and EOF, so treat stdin
+    # that is no longer a terminal as quit rather than spinning on EOF.
+    until IFS= read -r -s -n1 -t 1 REPLY; do
+        (( RESIZED )) && { REPLY=""; return; }
+        [[ -t 0 ]] || { REPLY=q; return; }
+    done
     if [[ $REPLY == $'\033' ]]; then
         # bash 3.x only supports integer -t values; use 1 second.
         # Arrow-key bytes are already buffered so this returns instantly.
@@ -315,6 +374,9 @@ read_key() {
 #   since = <spec>     keep history since a date; overrides depth when set
 #                      Shorthand: Nd (days), Nw (weeks), Nm (months), Ny (years)
 #                      Or any git-understood date: "2024-01-01", "6 months ago"
+#   exclude = <glob>   skip this directory during discovery (repeatable);
+#                      a bare name ("vendor") matches anywhere, a path
+#                      ("~/work/archive", "*/third_party") matches that path
 load_config() {
     local cfg=""
     for f in "$HOME/.config/gitslim/config" "$HOME/.gitslim"; do
@@ -340,6 +402,9 @@ load_config() {
                     printf "gitslim: config: invalid depth '%s', using default\n" "$val" >&2
                 fi ;;
             since) SINCE="$val" ;;
+            exclude)
+                [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"   # leading ~/ → $HOME
+                [[ -n "$val" ]] && EXCLUDES+=("$val") ;;
         esac
     done < "$cfg"
 }
@@ -427,7 +492,7 @@ do_slim() {
     printf "\n${INK_DIM}Press any key to return…${RESET}\n"
     IFS= read -r -s -n1
 
-    tput smcup; tput civis; stty cbreak -echo 2>/dev/null
+    tput smcup; tput civis; stty cbreak -echo </dev/tty 2>/dev/null
     printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1007l'
     do_sort
 }
@@ -450,6 +515,11 @@ save_cache() {
     local tmp="${CACHE_FILE}.tmp"
     local i n=${#RP[@]} mtime
     : > "$tmp" || return
+    # Keep entries from other search roots: this run only knows its own subtree
+    for (( i = 0; i < ${#CACHE_KEYS[@]}; i++ )); do
+        _under_root "${CACHE_KEYS[$i]}" && continue
+        printf '%s\t%s\n' "${CACHE_KEYS[$i]}" "${CACHE_VALS[$i]}" >> "$tmp"
+    done
     for (( i = 0; i < n; i++ )); do
         # Skip unenriched entries (kb still 0)
         (( RS[i] == 0 )) && continue
@@ -482,24 +552,155 @@ cache_lookup() {
 }
 
 # ── Scan phase 1: discover repos (cheap; just `find`) ─────────────────────────
-discover_repos() {
-    while IFS= read -r git_dir; do
-        [[ ! -d "$git_dir" ]] && continue          # skip submodule .git files
-        local repo="${git_dir%/.git}"
-        [[ ! -d "$repo"    ]] && continue
+# `find` over a large tree (e.g. all of $HOME) can take a minute, so show the
+# splash with a live count instead of a blank screen. Returns 1 if the user quit.
+draw_splash() {
+    tput cup 0 0
+    printf '%s' "$CYAN"
+    cat << 'LOGO'
+       _ _       _ _
+   ___(_) |_ ___| (_)_ __ ___
+  / _ \ | __/ __| | | '_ ` _ \
+ | (_| | | |_\__ \ | | | | | |
+  \__, |_|\__|___/_|_|_| |_| |
+   __/ |
+  |___/  ✂─ ─ ─ ─ ─ ─ ─
+LOGO
+    printf '%s\n' "$RESET"
+}
 
-        RP+=("$repo")
+draw_discover_status() {
+    local tilde='~'   # literal; bash 4.3+ tilde-expands a bare ~ in the replacement
+    local rw=$(( $(_cols) - 40 ))   # room left for the path after the fixed text
+    (( rw < 12 )) && rw=12
+    tput cup 9 0
+    printf '  %sSearching%s %s%s%s %s…%s ' \
+        "$INK_DIM" "$RESET" "$INK" "$(fit "${SEARCH_ROOT/#$HOME/$tilde}" "$rw")" \
+        "$RESET" "$INK_DIM" "$RESET"
+    printf '%s%d%s %srepos found%s' "$CYAN" "${#RP[@]}" "$RESET" "$INK_DIM" "$RESET"
+    tput el
+    printf '\n\n  %sQ or Ctrl-C to quit%s' "$INK_MUTE" "$RESET"
+    tput el
+}
+
+# With repos already seeded from the cache (SEARCHING=1) the list stays on
+# screen and new finds are appended to it; otherwise the splash is shown.
+# Afterwards, repos no longer found (deleted, or now excluded) are dropped.
+_discover_redraw() {
+    if (( SEARCHING )); then
+        draw
+    else
+        draw_discover_status
+    fi
+}
+
+discover_repos() {
+    local seeded=${#RP[@]} known=$'\n' i
+    for (( i = 0; i < seeded; i++ )); do known+="${RP[$i]}"$'\n'; done
+    local found=$'\n'   # every repo find reports, for dropping stale seeds
+
+    tput clear
+    if (( SEARCHING )); then
+        draw
+    else
+        draw_splash
+        draw_discover_status
+    fi
+
+    # find runs in the background, writing to a temp file that is polled on a
+    # timer. Reading its output directly would leave the UI frozen (and Q
+    # unread) through long stretches with no matches, and bash 3.2's `read -t`
+    # discards partial lines on timeout so it can't be used to break that up.
+    local prune=() pat
+    for pat in "${EXCLUDES[@]}"; do
+        # Asking for an excluded dir by name (`gitslim ~/Library`) overrides it
+        # shellcheck disable=SC2053  # glob match intended
+        [[ "$SEARCH_ROOT" == $pat || "${SEARCH_ROOT##*/}" == $pat ]] && continue
+        (( ${#prune[@]} )) && prune+=(-o)
+        [[ "$pat" == */* ]] && prune+=(-path "$pat") || prune+=(-name "$pat")
+    done
+
+    DISCOVER_TMP=$(mktemp)
+    find "$SEARCH_ROOT" \( "${prune[@]}" \) -prune \
+        -o -type d -name '.git' -print >"$DISCOVER_TMP" 2>/dev/null &
+    local fpid=$! seen=0 total finished=0 git_dir
+    REPLY=""
+
+    while true; do
+        kill -0 "$fpid" 2>/dev/null || finished=1   # check before reading: no lines missed
+        total=$(wc -l <"$DISCOVER_TMP"); total=${total//[!0-9]/}
+        if (( total > seen )); then
+            # Only complete (newline-terminated) lines; a partial last line waits
+            while IFS= read -r git_dir; do
+                [[ ! -d "$git_dir" ]] && continue          # skip submodule .git files
+                local repo="${git_dir%/.git}"
+                [[ ! -d "$repo"    ]] && continue
+
+                found+="$repo"$'\n'
+                [[ "$known" == *$'\n'"$repo"$'\n'* ]] && continue   # seeded from cache
+                RP+=("$repo")
+                RS+=(0); RA+=(9999); RH+=(0); RW+=("false"); RU+=(0); RF+=(0); RM+=(0)
+                RI+=("$(( ${#RP[@]} - 1 ))")
+            done < <(sed -n "$(( seen + 1 )),${total}p" "$DISCOVER_TMP")
+            seen=$total
+            _discover_redraw
+        fi
+        if (( RESIZED )); then
+            RESIZED=0; tput clear
+            (( SEARCHING )) || draw_splash
+            _discover_redraw
+        fi
+        (( finished )) && break
+
+        poll_key
+        case "$REPLY" in q|Q) kill "$fpid" 2>/dev/null; break ;; esac
+        sleep 0.2
+    done
+
+    wait "$fpid" 2>/dev/null
+    rm -f "$DISCOVER_TMP"; DISCOVER_TMP=""
+    case "$REPLY" in q|Q) return 1 ;; esac
+
+    (( seeded )) && drop_unfound "$found"
+    return 0
+}
+
+# Remove repos (from the cache seed) that the finished `find` didn't report.
+# Arg: newline-delimited, newline-wrapped list of found repo paths.
+drop_unfound() {
+    local found=$1 i n=${#RP[@]}
+    local -a p=() s=() a=() h=() w=() u=() f=() m=()
+    for (( i = 0; i < n; i++ )); do
+        [[ "$found" == *$'\n'"${RP[$i]}"$'\n'* ]] || continue
+        p+=("${RP[$i]}"); s+=("${RS[$i]}"); a+=("${RA[$i]}"); h+=("${RH[$i]}")
+        w+=("${RW[$i]}"); u+=("${RU[$i]}"); f+=("${RF[$i]}"); m+=("${RM[$i]}")
+    done
+    (( ${#p[@]} == n )) && return
+    _log "dropping $(( n - ${#p[@]} )) cached repos not found on disk"
+    RP=(); RS=(); RA=(); RH=(); RW=(); RU=(); RF=(); RM=(); RI=()
+    (( ${#p[@]} )) || return   # "${p[@]}" on an empty array trips set -u in bash 3.2
+    RP=("${p[@]}"); RS=("${s[@]}"); RA=("${a[@]}"); RH=("${h[@]}")
+    RW=("${w[@]}"); RU=("${u[@]}"); RF=("${f[@]}"); RM=("${m[@]}")
+    for (( i = 0; i < ${#RP[@]}; i++ )); do RI+=("$i"); done
+    CURSOR=0; SCROLL=0
+}
+
+# The root is quoted so any glob characters in it ([, ?, *) match literally
+_under_root() { [[ "$1" == "$SEARCH_ROOT" || "$1" == "${SEARCH_ROOT%/}/"* ]]; }
+
+# Seed the list from cached repos under SEARCH_ROOT whose .git still exists,
+# so a repeat run shows its list at once while `find` looks for new repos.
+seed_from_cache() {
+    local i n=${#CACHE_KEYS[@]} path
+    for (( i = 0; i < n; i++ )); do
+        path="${CACHE_KEYS[$i]}"
+        _under_root "$path" || continue
+        [[ -d "$path/.git" ]] || continue
+        RP+=("$path")
         RS+=(0); RA+=(9999); RH+=(0); RW+=("false"); RU+=(0); RF+=(0); RM+=(0)
         RI+=("$(( ${#RP[@]} - 1 ))")
-    done < <(
-        find "$SEARCH_ROOT" \
-            \( -path '*/node_modules' \
-               -o -path '*/.Trash' \
-               -o -path '*/Library/Caches' \
-               -o -path '*/Library/Developer' \
-            \) -prune \
-            -o -type d -name '.git' -print 2>/dev/null
-    )
+        cache_lookup "$(( ${#RP[@]} - 1 ))" || true   # fills fresh entries now
+    done
 }
 
 # ── Scan phase 2: enrich one repo with sizes/ages/remote/etc ──────────────────
@@ -528,28 +729,34 @@ enrich_repo() {
     ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) \
         && (( ahead > 0 )) && RU[$i]=1 || true
 
+    # Tracked + untracked-but-not-ignored files only. A plain `find` also walked
+    # .git, node_modules, build output, etc. — slow, and an `npm install`
+    # isn't a "touch". Deleted-but-tracked files make stat fail; that's fine.
     local fmod
-    fmod=$(find "$repo" -not -path '*/.git*' -type f \
-               -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)
+    fmod=$(git -C "$repo" ls-files -z -co --exclude-standard 2>/dev/null \
+               | (cd "$repo" && xargs -0 stat -f '%m' 2>/dev/null) | sort -rn | head -1)
     [[ "$fmod" =~ ^[0-9]+$ ]] && RF[$i]="$fmod"
 }
 
 scan() {
     local now; now=$(date +%s)
     load_cache
+    seed_from_cache
+    (( ${#RP[@]} )) && { SEARCHING=1; do_sort; }   # cached list: show it sorted
 
-    discover_repos
+    discover_repos || return 1
+    SEARCHING=0
+    tput clear
     draw   # show full list with placeholder data immediately
 
     local i n=${#RP[@]}
     for (( i = 0; i < n; i++ )); do
         enrich_repo "$i" "$now"
+        (( RESIZED )) && { RESIZED=0; tput clear; }
         draw
 
-        # Non-blocking quit check
-        if IFS= read -r -s -n1 -t 0 REPLY 2>/dev/null; then
-            case "$REPLY" in q|Q|$'\x03') return 1 ;; esac
-        fi
+        poll_key
+        case "$REPLY" in q|Q) return 1 ;; esac
     done
 
     save_cache
@@ -560,25 +767,13 @@ main() {
     load_config
     _log "startup: bash=$BASH_VERSION TERM=${TERM:-unset}"
 
-    # Splash on normal screen (visible when TUI exits)
-    printf '%s' "$CYAN"
-    cat << 'LOGO'
-       _ _       _ _
-   ___(_) |_ ___| (_)_ __ ___
-  / _ \ | __/ __| | | '_ ` _ \
- | (_| | | |_\__ \ | | | | | |
-  \__, |_|\__|___/_|_|_| |_| |
-   __/ |
-  |___/  ✂─ ─ ─ ─ ─ ─ ─
-LOGO
-    printf '%s' "$RESET"
-
-    # Enter TUI before scanning so repos appear as they're found
-    SAVED_STTY=$(stty -g 2>/dev/null)
+    # Enter TUI before scanning so the splash and repos appear as they're found
+    SAVED_STTY=$(stty -g </dev/tty 2>/dev/null)
     tput smcup
     tput civis
     tput rmam 2>/dev/null || true
-    stty cbreak -echo 2>/dev/null   # cbreak: per-char delivery; needed for read -t 0
+    # cbreak: per-char delivery; min 0 time 0: reads return immediately (poll_key)
+    stty cbreak -echo min 0 time 0 </dev/tty 2>/dev/null
     printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1007l'  # disable all mouse
 
     SCANNING=1
@@ -593,10 +788,13 @@ LOGO
 
     do_sort   # apply chosen sort order now that all repos are known
 
-    # Discard any keys pressed during scan to avoid spurious navigation
-    while IFS= read -r -s -n1 -t 0 _ 2>/dev/null; do :; done
+    # Discard any keys pressed during scan to avoid spurious navigation, then
+    # switch back to blocking reads for the interactive loop
+    poll_key; while [[ -n "$REPLY" ]]; do poll_key; done
+    stty min 1 time 0 </dev/tty 2>/dev/null
 
     while true; do
+        (( RESIZED )) && { RESIZED=0; tput clear; }
         draw
         read_key
         local n=${#RI[@]}
