@@ -20,9 +20,14 @@ SEARCH_ROOT="${1:-$HOME}"
 DEBUG_LOG="${GITSLIM_DEBUG_LOG:-}"
 _log() {
     [[ -z "$DEBUG_LOG" ]] && return
-    printf '%s %s\n' "$(date '+%T')" "$*" >> "$DEBUG_LOG"
+    { printf '%s %s\n' "$(date '+%T')" "$*" >> "$DEBUG_LOG"; } 2>/dev/null
 }
-[[ -n "$DEBUG_LOG" ]] && : > "$DEBUG_LOG"
+# An unwritable path would spray shell errors over the TUI; warn once, before
+# the TUI starts, and run without logging.
+if [[ -n "$DEBUG_LOG" ]] && ! { : > "$DEBUG_LOG"; } 2>/dev/null; then
+    printf 'gitslim: cannot write debug log %s; logging disabled\n' "$DEBUG_LOG" >&2
+    DEBUG_LOG=""
+fi
 
 # ── Brand palette (ANSI 256-colour) ───────────────────────────────────────────
 ESC=$'\033'
