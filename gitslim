@@ -13,6 +13,13 @@ if (( BASH_VERSINFO[0] < 3 )); then
     exit 1
 fi
 
+# Keys are read from stdin; without a terminal there read_key can't block.
+# Checked before the EXIT trap so a refusal doesn't emit terminal sequences.
+if [[ ! -t 0 ]]; then
+    printf 'gitslim: stdin must be a terminal\n' >&2
+    exit 1
+fi
+
 SEARCH_ROOT="${1:-$HOME}"
 
 # ── Debug log ──────────────────────────────────────────────────────────────────
@@ -317,8 +324,11 @@ read_key() {
     local _c
     # Wake every second so a resize redraws without waiting for a key. A
     # timeout loses nothing: -n1 completes on the first byte that arrives.
+    # bash 3.2 returns the same status for a timeout and EOF, so treat stdin
+    # that is no longer a terminal as quit rather than spinning on EOF.
     until IFS= read -r -s -n1 -t 1 REPLY; do
         (( RESIZED )) && { REPLY=""; return; }
+        [[ -t 0 ]] || { REPLY=q; return; }
     done
     if [[ $REPLY == $'\033' ]]; then
         # bash 3.x only supports integer -t values; use 1 second.
