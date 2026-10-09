@@ -73,6 +73,7 @@ declare -a RI=()   # sorted indices into above arrays
 
 CURSOR=0; SCROLL=0; SORT_BY=age
 SCANNING=0       # 1 while scan is running; draw() adapts header/footer
+SEARCHING=0      # 1 while `find` runs behind a list seeded from the cache
 SAVED_STTY=""    # terminal state saved before TUI entry; restored on cleanup
 TOTAL_FREED=0    # cumulative KB freed across slim operations this session
 DISCOVER_TMP=""  # discover_repos' find output; removed on cleanup
@@ -243,7 +244,9 @@ draw() {
     local freed_str=""
     (( TOTAL_FREED > 0 )) && freed_str="  ${LIME}▲ $(fmt_size $TOTAL_FREED) freed${RESET}"
     if (( SCANNING )); then
-        printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · scanning…${RESET}%s" "$n" "$freed_str"
+        local phase="scanning…"
+        (( SEARCHING )) && phase="searching for new repos…"
+        printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · %s${RESET}%s" "$n" "$phase" "$freed_str"
     else
         printf "${MAGENTA}▍${RESET} ${BOLD}${CYAN}gitslim${RESET}  ${INK_MUTE}%d repos · sort:${RESET}${INK}%s${RESET}%s%s" "$n" "$SORT_BY" "$marked_str" "$freed_str"
     fi
@@ -512,6 +515,11 @@ save_cache() {
     local tmp="${CACHE_FILE}.tmp"
     local i n=${#RP[@]} mtime
     : > "$tmp" || return
+    # Keep entries from other search roots: this run only knows its own subtree
+    for (( i = 0; i < ${#CACHE_KEYS[@]}; i++ )); do
+        _under_root "${CACHE_KEYS[$i]}" && continue
+        printf '%s\t%s\n' "${CACHE_KEYS[$i]}" "${CACHE_VALS[$i]}" >> "$tmp"
+    done
     for (( i = 0; i < n; i++ )); do
         # Skip unenriched entries (kb still 0)
         (( RS[i] == 0 )) && continue
@@ -575,10 +583,29 @@ draw_discover_status() {
     tput el
 }
 
+# With repos already seeded from the cache (SEARCHING=1) the list stays on
+# screen and new finds are appended to it; otherwise the splash is shown.
+# Afterwards, repos no longer found (deleted, or now excluded) are dropped.
+_discover_redraw() {
+    if (( SEARCHING )); then
+        draw
+    else
+        draw_discover_status
+    fi
+}
+
 discover_repos() {
+    local seeded=${#RP[@]} known=$'\n' i
+    for (( i = 0; i < seeded; i++ )); do known+="${RP[$i]}"$'\n'; done
+    local found=$'\n'   # every repo find reports, for dropping stale seeds
+
     tput clear
-    draw_splash
-    draw_discover_status
+    if (( SEARCHING )); then
+        draw
+    else
+        draw_splash
+        draw_discover_status
+    fi
 
     # find runs in the background, writing to a temp file that is polled on a
     # timer. Reading its output directly would leave the UI frozen (and Q
@@ -609,15 +636,19 @@ discover_repos() {
                 local repo="${git_dir%/.git}"
                 [[ ! -d "$repo"    ]] && continue
 
+                found+="$repo"$'\n'
+                [[ "$known" == *$'\n'"$repo"$'\n'* ]] && continue   # seeded from cache
                 RP+=("$repo")
                 RS+=(0); RA+=(9999); RH+=(0); RW+=("false"); RU+=(0); RF+=(0); RM+=(0)
                 RI+=("$(( ${#RP[@]} - 1 ))")
             done < <(sed -n "$(( seen + 1 )),${total}p" "$DISCOVER_TMP")
             seen=$total
-            draw_discover_status
+            _discover_redraw
         fi
         if (( RESIZED )); then
-            RESIZED=0; tput clear; draw_splash; draw_discover_status
+            RESIZED=0; tput clear
+            (( SEARCHING )) || draw_splash
+            _discover_redraw
         fi
         (( finished )) && break
 
@@ -629,7 +660,46 @@ discover_repos() {
     wait "$fpid" 2>/dev/null
     rm -f "$DISCOVER_TMP"; DISCOVER_TMP=""
     case "$REPLY" in q|Q) return 1 ;; esac
+
+    (( seeded )) && drop_unfound "$found"
     return 0
+}
+
+# Remove repos (from the cache seed) that the finished `find` didn't report.
+# Arg: newline-delimited, newline-wrapped list of found repo paths.
+drop_unfound() {
+    local found=$1 i n=${#RP[@]}
+    local -a p=() s=() a=() h=() w=() u=() f=() m=()
+    for (( i = 0; i < n; i++ )); do
+        [[ "$found" == *$'\n'"${RP[$i]}"$'\n'* ]] || continue
+        p+=("${RP[$i]}"); s+=("${RS[$i]}"); a+=("${RA[$i]}"); h+=("${RH[$i]}")
+        w+=("${RW[$i]}"); u+=("${RU[$i]}"); f+=("${RF[$i]}"); m+=("${RM[$i]}")
+    done
+    (( ${#p[@]} == n )) && return
+    _log "dropping $(( n - ${#p[@]} )) cached repos not found on disk"
+    RP=(); RS=(); RA=(); RH=(); RW=(); RU=(); RF=(); RM=(); RI=()
+    (( ${#p[@]} )) || return   # "${p[@]}" on an empty array trips set -u in bash 3.2
+    RP=("${p[@]}"); RS=("${s[@]}"); RA=("${a[@]}"); RH=("${h[@]}")
+    RW=("${w[@]}"); RU=("${u[@]}"); RF=("${f[@]}"); RM=("${m[@]}")
+    for (( i = 0; i < ${#RP[@]}; i++ )); do RI+=("$i"); done
+    CURSOR=0; SCROLL=0
+}
+
+_under_root() { [[ "$1" == "$SEARCH_ROOT" || "$1" == "${SEARCH_ROOT%/}"/* ]]; }
+
+# Seed the list from cached repos under SEARCH_ROOT whose .git still exists,
+# so a repeat run shows its list at once while `find` looks for new repos.
+seed_from_cache() {
+    local i n=${#CACHE_KEYS[@]} path
+    for (( i = 0; i < n; i++ )); do
+        path="${CACHE_KEYS[$i]}"
+        _under_root "$path" || continue
+        [[ -d "$path/.git" ]] || continue
+        RP+=("$path")
+        RS+=(0); RA+=(9999); RH+=(0); RW+=("false"); RU+=(0); RF+=(0); RM+=(0)
+        RI+=("$(( ${#RP[@]} - 1 ))")
+        cache_lookup "$(( ${#RP[@]} - 1 ))" || true   # fills fresh entries now
+    done
 }
 
 # ── Scan phase 2: enrich one repo with sizes/ages/remote/etc ──────────────────
@@ -670,8 +740,11 @@ enrich_repo() {
 scan() {
     local now; now=$(date +%s)
     load_cache
+    seed_from_cache
+    (( ${#RP[@]} )) && { SEARCHING=1; do_sort; }   # cached list: show it sorted
 
     discover_repos || return 1
+    SEARCHING=0
     tput clear
     draw   # show full list with placeholder data immediately
 
