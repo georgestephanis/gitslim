@@ -16,8 +16,8 @@ fi
 SEARCH_ROOT="${1:-$HOME}"
 
 # ── Debug log ──────────────────────────────────────────────────────────────────
-# Set to a path (e.g. /tmp/gitslim-debug.log) to enable; empty to disable.
-DEBUG_LOG=""
+# Set GITSLIM_DEBUG_LOG to a path (e.g. /tmp/gitslim-debug.log) to enable.
+DEBUG_LOG="${GITSLIM_DEBUG_LOG:-}"
 _log() {
     [[ -z "$DEBUG_LOG" ]] && return
     printf '%s %s\n' "$(date '+%T')" "$*" >> "$DEBUG_LOG"

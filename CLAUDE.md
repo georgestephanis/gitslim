@@ -79,7 +79,7 @@ since = <spec>   # keep history since a date; overrides depth
 
 ## Debug log
 
-`DEBUG_LOG` is empty by default (logging disabled). Set it to a file path to enable — the log is cleared on each run. Useful entries that remain in the code: startup environment, SIGINT/SIGTERM receipt, and slim invocations.
+`DEBUG_LOG` comes from the `GITSLIM_DEBUG_LOG` environment variable and is empty by default (logging disabled). Run `GITSLIM_DEBUG_LOG=/tmp/gitslim.log gitslim` to enable it; the log is cleared on each run. Useful entries that remain in the code: startup environment, SIGINT/SIGTERM receipt, and slim invocations.
 
 ## Making changes
 

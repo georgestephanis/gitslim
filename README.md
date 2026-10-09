@@ -67,6 +67,8 @@ gitslim            # scan $HOME
 gitslim ~/code     # scan a specific directory
 ```
 
+Set `GITSLIM_DEBUG_LOG=/path/to/log` to write a debug log (cleared on each run).
+
 ### Keyboard controls
 
 | Key | Action |
