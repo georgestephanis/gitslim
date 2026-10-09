@@ -133,7 +133,8 @@ fmt_size() {
 
 fmt_age() {
     local d=$1
-    if   (( d == 0  )); then printf 'today'
+    if   (( d >= 9999 )); then printf -- '-'   # unknown: no commits / no files / not scanned yet
+    elif (( d == 0  )); then printf 'today'
     elif (( d == 1  )); then printf '1 day ago'
     elif (( d <  7  )); then printf '%d days ago'   "$d"
     elif (( d <  14 )); then printf '1 week ago'
@@ -627,9 +628,12 @@ enrich_repo() {
     ahead=$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null) \
         && (( ahead > 0 )) && RU[$i]=1 || true
 
+    # Tracked + untracked-but-not-ignored files only. A plain `find` also walked
+    # .git, node_modules, build output, etc. — slow, and an `npm install`
+    # isn't a "touch". Deleted-but-tracked files make stat fail; that's fine.
     local fmod
-    fmod=$(find "$repo" -not -path '*/.git*' -type f \
-               -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)
+    fmod=$(git -C "$repo" ls-files -z -co --exclude-standard 2>/dev/null \
+               | (cd "$repo" && xargs -0 stat -f '%m' 2>/dev/null) | sort -rn | head -1)
     [[ "$fmod" =~ ^[0-9]+$ ]] && RF[$i]="$fmod"
 }
 
