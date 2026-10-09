@@ -133,7 +133,7 @@ fmt_size() {
 
 fmt_age() {
     local d=$1
-    if   (( d >= 9999 )); then printf -- '-'   # unknown: no commits / no files / not scanned yet
+    if   (( d == 9999 )); then printf -- '-'   # sentinel: no commits / no files / not scanned yet
     elif (( d == 0  )); then printf 'today'
     elif (( d == 1  )); then printf '1 day ago'
     elif (( d <  7  )); then printf '%d days ago'   "$d"

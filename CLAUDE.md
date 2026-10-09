@@ -10,7 +10,7 @@ The script is a single file: `gitslim`. Install it by copying or symlinking it o
 
 Everything is in one bash script. The execution flow is:
 
-1. **Scan phase** (`scan`): runs in two passes. Phase 1 (`discover_repos`) is just `find`, which can take a minute over all of `$HOME`. It runs `find` in the background writing to a temp file (`DISCOVER_TMP`), and polls that file every 0.2s, showing the splash logo plus a live "N repos found" count and checking for `Q`. Complete lines populate `RP[]` and seed the data arrays with placeholders (`RS=0`, `RA=9999`, etc.); when `find` finishes the full list draws immediately. Phase 2 (`enrich_repo` per index) does the expensive work: `du`, `git log`, `git rev-parse --is-shallow-repository`, `git remote`, `git rev-list --count @{u}..HEAD`, and `git ls-files -co --exclude-standard | xargs stat` (tracked plus untracked-but-not-ignored files, so `node_modules`/build output don't count as a touch). `draw()` runs between each enrichment so cells fill in progressively. A persistent cache at `~/.cache/gitslim/cache` (or `~/.gitslim-cache` fallback) keyed by repo path with the `.git` mtime as the freshness check makes subsequent runs nearly instant.
+1. **Scan phase** (`scan`): runs in two passes. Phase 1 (`discover_repos`) is just `find`, which can take a minute over all of `$HOME`. It runs `find` in the background writing to a temp file (`DISCOVER_TMP`), and polls that file every 0.2s, showing the splash logo plus a live "N repos found" count and checking for `Q`. Complete lines populate `RP[]` and seed the data arrays with placeholders (`RS=0`, `RA=9999`, etc.); when `find` finishes the full list draws immediately. Phase 2 (`enrich_repo` per index) does the expensive work: `du`, `git log`, `git rev-parse --is-shallow-repository`, `git remote`, `git rev-list --count @{u}..HEAD`, and `git ls-files -z -co --exclude-standard | xargs -0 stat -f '%m'` (BSD `stat`; tracked plus untracked-but-not-ignored files, so `node_modules`/build output don't count as a touch). `draw()` runs between each enrichment so cells fill in progressively. A persistent cache at `~/.cache/gitslim/cache` (or `~/.gitslim-cache` fallback) keyed by repo path with the `.git` mtime as the freshness check makes subsequent runs nearly instant.
 
 2. **Sort** (`do_sort`): builds a sorted index array `RI` over the data arrays using an external `sort` invocation via a temp file. Default sort is by age descending (oldest first).
 
@@ -44,7 +44,7 @@ Status indicators are a 4-character text label in the rightmost column of each r
  [M] <path>  <size>  <last commit>  <last touch>  <status>
 ```
 
-where `pw = cols - 54` gives the path column its width. `<last commit>` is the age of the most recent git commit; `<last touch>` is the age of the most recently modified file in the working tree (from `RF[]`). Either age shows `-` when it's unknown (sentinel `9999` days: no commits, no files, or not scanned yet).
+where `pw = cols - 54` gives the path column its width. `<last commit>` is the age of the most recent git commit; `<last touch>` is the age of the most recently modified file in the working tree (from `RF[]`). Either age shows `-` when it's unknown (exactly the sentinel `9999` days: no commits, no files, or not scanned yet).
 
 ## Constraints and gotchas
 
