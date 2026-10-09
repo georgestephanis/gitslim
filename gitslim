@@ -67,6 +67,7 @@ SCANNING=0       # 1 while scan is running; draw() adapts header/footer
 SAVED_STTY=""    # terminal state saved before TUI entry; restored on cleanup
 TOTAL_FREED=0    # cumulative KB freed across slim operations this session
 DISCOVER_TMP=""  # discover_repos' find output; removed on cleanup
+RESIZED=0        # set by the WINCH trap; drawing loops redraw when they see it
 
 # Cache: ~/.cache/gitslim/cache (XDG); fallback ~/.gitslim-cache
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gitslim"
@@ -97,6 +98,11 @@ _cleanup() {
 trap _cleanup EXIT
 trap '_log "received SIGINT";  exit 130' INT
 trap '_log "received SIGTERM"; exit 143' TERM
+
+# Terminal resized: only set a flag. Drawing from inside the trap isn't
+# reliable — on bash 3.2, command substitutions run from a trap that fires
+# during a blocking `read` return empty, so _cols/_rows would read as blank.
+trap 'RESIZED=1' WINCH
 
 # ── Formatting ─────────────────────────────────────────────────────────────────
 fmt_size() {
@@ -309,7 +315,11 @@ draw() {
 # ── Key input ──────────────────────────────────────────────────────────────────
 read_key() {
     local _c
-    IFS= read -r -s -n1 REPLY
+    # Wake every second so a resize redraws without waiting for a key. A
+    # timeout loses nothing: -n1 completes on the first byte that arrives.
+    until IFS= read -r -s -n1 -t 1 REPLY; do
+        (( RESIZED )) && { REPLY=""; return; }
+    done
     if [[ $REPLY == $'\033' ]]; then
         # bash 3.x only supports integer -t values; use 1 second.
         # Arrow-key bytes are already buffered so this returns instantly.
@@ -565,6 +575,9 @@ discover_repos() {
             seen=$total
             draw_discover_status
         fi
+        if (( RESIZED )); then
+            RESIZED=0; tput clear; draw_splash; draw_discover_status
+        fi
         (( finished )) && break
 
         poll_key
@@ -621,6 +634,7 @@ scan() {
     local i n=${#RP[@]}
     for (( i = 0; i < n; i++ )); do
         enrich_repo "$i" "$now"
+        (( RESIZED )) && { RESIZED=0; tput clear; }
         draw
 
         poll_key
@@ -662,6 +676,7 @@ main() {
     stty min 1 time 0 </dev/tty 2>/dev/null
 
     while true; do
+        (( RESIZED )) && { RESIZED=0; tput clear; }
         draw
         read_key
         local n=${#RI[@]}
