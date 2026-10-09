@@ -511,9 +511,11 @@ LOGO
 
 draw_discover_status() {
     local tilde='~'   # literal; bash 4.3+ tilde-expands a bare ~ in the replacement
+    local rw=$(( $(_cols) - 40 ))   # room left for the path after the fixed text
+    (( rw < 12 )) && rw=12
     tput cup 9 0
     printf '  %sSearching%s %s%s%s %s…%s ' \
-        "$INK_DIM" "$RESET" "$INK" "$(fit "${SEARCH_ROOT/#$HOME/$tilde}" $(( $(_cols) - 40 )))" \
+        "$INK_DIM" "$RESET" "$INK" "$(fit "${SEARCH_ROOT/#$HOME/$tilde}" "$rw")" \
         "$RESET" "$INK_DIM" "$RESET"
     printf '%s%d%s %srepos found%s' "$CYAN" "${#RP[@]}" "$RESET" "$INK_DIM" "$RESET"
     tput el
