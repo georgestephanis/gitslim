@@ -76,7 +76,11 @@ depth = N        # keep N commits (default: 1); passed as --depth N
 since = <spec>   # keep history since a date; overrides depth
                  # Shorthand: Nd/Nw/Nm/Ny (days/weeks/months/years)
                  # Or any git date: "2024-01-01", "6 months ago"
+exclude = <glob> # skip during discovery (repeatable); appended to EXCLUDES
+                 # Contains "/" → find -path (leading ~/ expanded); else -name
 ```
+
+`EXCLUDES` defaults to `node_modules` plus `~/Library`, `~/.Trash`, `~/.cache`, `~/.npm`, `~/.cargo`, `~/.rustup`, `~/.pyenv`, `~/.nvm`, `~/go/pkg`. Pruning these took a `$HOME` scan from ~54s to ~6s. Repos there are caches or tool-managed state (editor checkpoints, `uv`'s git cache), and slimming them could break the tool that owns them. An exclude that matches the search root itself is skipped, so `gitslim ~/Library` still works. `SEARCH_ROOT` has trailing slashes stripped, because `find` would otherwise print `root//sub` and `-path` patterns wouldn't match.
 
 ## Debug log
 

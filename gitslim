@@ -21,6 +21,8 @@ if [[ ! -t 0 ]]; then
 fi
 
 SEARCH_ROOT="${1:-$HOME}"
+# No trailing slash: find would print "root//sub", which defeats -path excludes
+while [[ "$SEARCH_ROOT" == ?*/ ]]; do SEARCH_ROOT="${SEARCH_ROOT%/}"; done
 
 # ── Debug log ──────────────────────────────────────────────────────────────────
 # Set GITSLIM_DEBUG_LOG to a path (e.g. /tmp/gitslim-debug.log) to enable.
@@ -85,6 +87,24 @@ declare -a CACHE_KEYS=() CACHE_VALS=()   # parallel arrays: key=repo path, val=t
 # Config (overridden by load_config)
 DEPTH=1    # commits to keep (--depth N)
 SINCE=""   # keep history since date/period (overrides DEPTH when set)
+
+# Directories discovery never descends into. A pattern containing "/" is matched
+# against the full path (find -path); otherwise against the directory name
+# (find -name). Repos in these places are dependencies, caches or tool-managed
+# state, and walking ~/Library alone accounts for most of a $HOME scan.
+# Extended with `exclude = …` lines in the config file.
+EXCLUDES=(
+    node_modules
+    "$HOME/Library"
+    "$HOME/.Trash"
+    "$HOME/.cache"
+    "$HOME/.npm"
+    "$HOME/.cargo"
+    "$HOME/.rustup"
+    "$HOME/.pyenv"
+    "$HOME/.nvm"
+    "$HOME/go/pkg"
+)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 # stty acts on fd 0 by default. A signal can arrive while fd 0 is the `find` pipe
@@ -351,6 +371,9 @@ read_key() {
 #   since = <spec>     keep history since a date; overrides depth when set
 #                      Shorthand: Nd (days), Nw (weeks), Nm (months), Ny (years)
 #                      Or any git-understood date: "2024-01-01", "6 months ago"
+#   exclude = <glob>   skip this directory during discovery (repeatable);
+#                      a bare name ("vendor") matches anywhere, a path
+#                      ("~/work/archive", "*/third_party") matches that path
 load_config() {
     local cfg=""
     for f in "$HOME/.config/gitslim/config" "$HOME/.gitslim"; do
@@ -376,6 +399,9 @@ load_config() {
                     printf "gitslim: config: invalid depth '%s', using default\n" "$val" >&2
                 fi ;;
             since) SINCE="$val" ;;
+            exclude)
+                [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"   # leading ~/ → $HOME
+                [[ -n "$val" ]] && EXCLUDES+=("$val") ;;
         esac
     done < "$cfg"
 }
@@ -558,13 +584,17 @@ discover_repos() {
     # timer. Reading its output directly would leave the UI frozen (and Q
     # unread) through long stretches with no matches, and bash 3.2's `read -t`
     # discards partial lines on timeout so it can't be used to break that up.
+    local prune=() pat
+    for pat in "${EXCLUDES[@]}"; do
+        # Asking for an excluded dir by name (`gitslim ~/Library`) overrides it
+        # shellcheck disable=SC2053  # glob match intended
+        [[ "$SEARCH_ROOT" == $pat || "${SEARCH_ROOT##*/}" == $pat ]] && continue
+        (( ${#prune[@]} )) && prune+=(-o)
+        [[ "$pat" == */* ]] && prune+=(-path "$pat") || prune+=(-name "$pat")
+    done
+
     DISCOVER_TMP=$(mktemp)
-    find "$SEARCH_ROOT" \
-        \( -path '*/node_modules' \
-           -o -path '*/.Trash' \
-           -o -path '*/Library/Caches' \
-           -o -path '*/Library/Developer' \
-        \) -prune \
+    find "$SEARCH_ROOT" \( "${prune[@]}" \) -prune \
         -o -type d -name '.git' -print >"$DISCOVER_TMP" 2>/dev/null &
     local fpid=$! seen=0 total finished=0 git_dir
     REPLY=""
