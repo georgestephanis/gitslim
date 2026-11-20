@@ -42,6 +42,14 @@ This matches the technique from [afriza's gist](https://gist.github.com/afriza/6
 
 ## Installation
 
+### One-line install
+
+```bash
+mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/georgestephanis/gitslim/trunk/gitslim -o ~/.local/bin/gitslim && chmod +x ~/.local/bin/gitslim
+```
+
+This installs for your user only, with no `sudo`. If `~/.local/bin` isn't on your `$PATH`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
+
 ### Symlink from a clone (recommended)
 
 Cloning and symlinking means `git pull` keeps the installed copy up to date automatically:
@@ -125,3 +133,7 @@ The search already skips `node_modules` and places where repos are caches or too
 - **Requires network access** during the slim operation (`git pull` fetches from the remote).
 - **Tags are deleted.** If you care about tags, back them up first or don't slim that repo.
 - Repos in detached HEAD state or with complex merge situations may fail; the error output from git is shown so you can diagnose.
+
+## License
+
+The code is GPL-3.0-or-later; see [LICENSE](LICENSE). The logo, banner and other assets in [`brand/`](brand/) are not covered by the GPL; see [brand/README.md](brand/README.md) for how they may be used.
