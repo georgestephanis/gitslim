@@ -42,6 +42,12 @@ This matches the technique from [afriza's gist](https://gist.github.com/afriza/6
 
 ## Installation
 
+### One-line install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/georgestephanis/gitslim/trunk/gitslim -o /usr/local/bin/gitslim && chmod +x /usr/local/bin/gitslim
+```
+
 ### Symlink from a clone (recommended)
 
 Cloning and symlinking means `git pull` keeps the installed copy up to date automatically:
@@ -125,3 +131,7 @@ The search already skips `node_modules` and places where repos are caches or too
 - **Requires network access** during the slim operation (`git pull` fetches from the remote).
 - **Tags are deleted.** If you care about tags, back them up first or don't slim that repo.
 - Repos in detached HEAD state or with complex merge situations may fail; the error output from git is shown so you can diagnose.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
