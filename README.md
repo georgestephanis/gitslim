@@ -45,8 +45,10 @@ This matches the technique from [afriza's gist](https://gist.github.com/afriza/6
 ### One-line install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/georgestephanis/gitslim/trunk/gitslim -o /usr/local/bin/gitslim && chmod +x /usr/local/bin/gitslim
+mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/georgestephanis/gitslim/trunk/gitslim -o ~/.local/bin/gitslim && chmod +x ~/.local/bin/gitslim
 ```
+
+This installs for your user only, with no `sudo`. If `~/.local/bin` isn't on your `$PATH`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
 ### Symlink from a clone (recommended)
 
@@ -134,4 +136,4 @@ The search already skips `node_modules` and places where repos are caches or too
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+The code is GPL-3.0-or-later; see [LICENSE](LICENSE). The logo, banner and other assets in [`brand/`](brand/) are not covered by the GPL; see [brand/README.md](brand/README.md) for how they may be used.
