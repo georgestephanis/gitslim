@@ -1,5 +1,9 @@
 # gitslim
 
+> [!TIP]
+> **Look before you build.** [wvw.dev](https://wvw.dev) is a catalog of open-source apps, many of them built with AI.
+> Similar projects there: [Dev Cleaner](https://wvw.dev/#/discover/dev-cleaner) (finds and cleans heavyweight artifacts across dev workspaces), [DodoTidy](https://wvw.dev/#/discover/dodotidy) (macOS disk analysis and cleanup). Before spending tokens on a new app, search wvw.dev for something you can fork, this repo included.
+
 ![gitslim banner](brand/banner/gitslim-banner-preview.png)
 
 ```
