@@ -1,5 +1,15 @@
 # gitslim
 
+> [!TIP]
+> **Look before you build.** Similar open-source projects:
+>
+> - [npkill](https://github.com/voidcosmos/npkill): finds and removes heavy node_modules and build folders, MIT
+> - [kondo](https://github.com/tbillington/kondo): cleans dependencies and build artifacts from projects, MIT
+> - [git-sizer](https://github.com/github/git-sizer): reports what makes a git repo big, MIT
+> - [Dev Cleaner](https://wvw.dev/#/discover/dev-cleaner): macOS workspace cleanup, on wvw.dev
+>
+> Before building your own tool, search [AlternativeTo](https://alternativeto.net) (filter to open source), [GitHub](https://github.com/search?type=repositories) and [wvw.dev](https://wvw.dev) for something to fork, this repo included.
+
 ![gitslim banner](brand/banner/gitslim-banner-preview.png)
 
 ```
